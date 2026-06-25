@@ -213,6 +213,21 @@ pub enum Event {
     },
     /// Location permission was denied by the user.
     LocationDenied,
+    /// Motion sensor update (accelerometer and/or gyroscope).
+    MotionUpdated {
+        /// Accelerometer X axis (m/s²) — `None` if not requested.
+        accel_x: Option<f64>,
+        /// Accelerometer Y axis (m/s²) — `None` if not requested.
+        accel_y: Option<f64>,
+        /// Accelerometer Z axis (m/s²) — `None` if not requested.
+        accel_z: Option<f64>,
+        /// Gyroscope X axis (rad/s) — `None` if not requested.
+        gyro_x: Option<f64>,
+        /// Gyroscope Y axis (rad/s) — `None` if not requested.
+        gyro_y: Option<f64>,
+        /// Gyroscope Z axis (rad/s) — `None` if not requested.
+        gyro_z: Option<f64>,
+    },
 }
 
 /// The lifecycle phase of a continuous gesture such as a pan.
@@ -278,6 +293,8 @@ pub enum EventKind {
     LocationUpdated,
     /// [`Event::LocationDenied`].
     LocationDenied,
+    /// [`Event::MotionUpdated`].
+    MotionUpdated,
 }
 
 impl Event {
@@ -308,6 +325,7 @@ impl Event {
             Event::RotateChanged { .. } => EventKind::RotateChanged,
             Event::LocationUpdated { .. } => EventKind::LocationUpdated,
             Event::LocationDenied => EventKind::LocationDenied,
+            Event::MotionUpdated { .. } => EventKind::MotionUpdated,
         }
     }
 
@@ -337,7 +355,8 @@ impl Event {
             | Event::DeepLink { .. }
             | Event::BiometricResult { .. }
             | Event::LocationUpdated { .. }
-            | Event::LocationDenied => None,
+            | Event::LocationDenied
+            | Event::MotionUpdated { .. } => None,
             Event::RotateChanged { target, .. } => Some(target),
         }
     }

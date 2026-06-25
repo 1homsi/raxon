@@ -36,6 +36,7 @@ use rax_dom::{
     Attribute, Backend, Event, EventSink, GestureKind, GesturePhase, HapticStyle, Host,
     KeyboardType, LayoutDirection, Mutation, TextSelection, WidgetId, WidgetKind,
 };
+// TextStyle is referenced as rax_dom::TextStyle in the match arms.
 use rax_runtime::App;
 use rax_view::View;
 
@@ -77,6 +78,12 @@ thread_local! {
     static PENDING_LOCATION_DENIED: Cell<bool> = const { Cell::new(false) };
     // The CLLocationManager instance (raw pointer, retained manually).
     static LOCATION_MANAGER: RefCell<Option<*mut AnyObject>> = const { RefCell::new(None) };
+    // Motion data polled each tick from CMMotionManager. Each tuple:
+    // (accel_x, accel_y, accel_z, gyro_x, gyro_y, gyro_z)
+    static PENDING_MOTION: RefCell<Vec<(Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>)>> =
+        const { RefCell::new(vec![]) };
+    // The CMMotionManager instance (raw pointer, retained manually).
+    static MOTION_MANAGER: RefCell<Option<*mut AnyObject>> = const { RefCell::new(None) };
 }
 
 fn handle_tap(tag_bits: u64) {
@@ -118,6 +125,61 @@ fn handle_tick() {
         std::mem::take(&mut *v)
     });
     let location_denied = PENDING_LOCATION_DENIED.with(|c| c.replace(false));
+
+    // Poll CMMotionManager for current accelerometer and gyroscope readings.
+    // CMAcceleration / CMRotationRate are both {f64, f64, f64} structs that
+    // objc2's msg_send! needs to receive by value. We implement Encode for our
+    // local wrappers using the same compound encoding CGPoint uses.
+    #[repr(C)]
+    struct Motion3 {
+        x: f64,
+        y: f64,
+        z: f64,
+    }
+    unsafe impl objc2::Encode for Motion3 {
+        const ENCODING: objc2::encode::Encoding =
+            objc2::encode::Encoding::Struct("CMAcceleration", &[
+                f64::ENCODING,
+                f64::ENCODING,
+                f64::ENCODING,
+            ]);
+    }
+
+    MOTION_MANAGER.with(|m| {
+        if let Some(mgr) = *m.borrow() {
+            let mut accel: (Option<f64>, Option<f64>, Option<f64>) = (None, None, None);
+            let mut gyro: (Option<f64>, Option<f64>, Option<f64>) = (None, None, None);
+
+            unsafe {
+                // Get accelerometer data
+                let accel_data: *mut AnyObject = msg_send![mgr, accelerometerData];
+                if !accel_data.is_null() {
+                    let acc: Motion3 = msg_send![accel_data, acceleration];
+                    accel = (Some(acc.x), Some(acc.y), Some(acc.z));
+                }
+
+                // Get gyroscope data
+                let gyro_data: *mut AnyObject = msg_send![mgr, gyroData];
+                if !gyro_data.is_null() {
+                    let rate: Motion3 = msg_send![gyro_data, rotationRate];
+                    gyro = (Some(rate.x), Some(rate.y), Some(rate.z));
+                }
+            }
+
+            if accel.0.is_some() || gyro.0.is_some() {
+                PENDING_MOTION.with(|q| {
+                    q.borrow_mut().push((accel.0, accel.1, accel.2, gyro.0, gyro.1, gyro.2));
+                });
+            }
+        }
+    });
+
+    // Drain motion events queued above.
+    let motion_events: Vec<(Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>)> =
+        PENDING_MOTION.with(|q| {
+            let mut v = q.borrow_mut();
+            std::mem::take(&mut *v)
+        });
 
     STATE.with(|s| {
         if let Some(state) = s.borrow().as_ref() {
@@ -173,6 +235,17 @@ fn handle_tick() {
             }
             if location_denied {
                 state.event_sink.dispatch(Event::LocationDenied);
+            }
+            // Dispatch queued motion sensor readings.
+            for (accel_x, accel_y, accel_z, gyro_x, gyro_y, gyro_z) in motion_events {
+                state.event_sink.dispatch(Event::MotionUpdated {
+                    accel_x,
+                    accel_y,
+                    accel_z,
+                    gyro_x,
+                    gyro_y,
+                    gyro_z,
+                });
             }
             app.tick();
             rax_plugin::tick_plugins();
@@ -1560,6 +1633,33 @@ impl Backend for UiKitBackend {
                             let _: () = msg_send![&*view, loadHTMLString: &*ns_html baseURL: base_url];
                         }
                     }
+                    Attribute::TextStyle(style) => {
+                        let style_name = match style {
+                            rax_dom::TextStyle::LargeTitle => "UICTFontTextStyleLargeTitle",
+                            rax_dom::TextStyle::Title1 => "UICTFontTextStyleTitle1",
+                            rax_dom::TextStyle::Title2 => "UICTFontTextStyleTitle2",
+                            rax_dom::TextStyle::Title3 => "UICTFontTextStyleTitle3",
+                            rax_dom::TextStyle::Headline => "UIFontTextStyleHeadline",
+                            rax_dom::TextStyle::Subheadline => "UIFontTextStyleSubheadline",
+                            rax_dom::TextStyle::Body => "UIFontTextStyleBody",
+                            rax_dom::TextStyle::Callout => "UIFontTextStyleCallout",
+                            rax_dom::TextStyle::Footnote => "UIFontTextStyleFootnote",
+                            rax_dom::TextStyle::Caption1 => "UIFontTextStyleCaption1",
+                            rax_dom::TextStyle::Caption2 => "UIFontTextStyleCaption2",
+                        };
+                        if let Ok(label) = view.clone().downcast::<UILabel>() {
+                            unsafe {
+                                let ns_style = NSString::from_str(style_name);
+                                let font: *mut AnyObject =
+                                    msg_send![class!(UIFont), preferredFontForTextStyle: &*ns_style];
+                                if !font.is_null() {
+                                    let _: () = msg_send![&*label, setFont: font];
+                                    // Enable dynamic type scaling with the font metrics.
+                                    let _: () = msg_send![&*label, setAdjustsFontForContentSizeCategory: true];
+                                }
+                            }
+                        }
+                    }
                 }
             }
             Mutation::SetFrame { id, rect } => {
@@ -1857,6 +1957,44 @@ impl Backend for UiKitBackend {
                     if let Some(mgr) = lm.borrow_mut().take() {
                         unsafe {
                             let _: () = msg_send![mgr, stopUpdatingLocation];
+                            objc_release(mgr);
+                        }
+                    }
+                });
+            }
+            Mutation::StartMotion { accelerometer, gyroscope } => {
+                unsafe {
+                    let mgr: *mut AnyObject = msg_send![class!(CMMotionManager), new];
+                    if mgr.is_null() {
+                        return;
+                    }
+                    // 60 Hz update interval
+                    let interval: f64 = 1.0 / 60.0;
+                    if accelerometer {
+                        let _: () = msg_send![mgr, setAccelerometerUpdateInterval: interval];
+                        let _: () = msg_send![mgr, startAccelerometerUpdates];
+                    }
+                    if gyroscope {
+                        let _: () = msg_send![mgr, setGyroUpdateInterval: interval];
+                        let _: () = msg_send![mgr, startGyroUpdates];
+                    }
+                    MOTION_MANAGER.with(|m| {
+                        // Release any previous manager
+                        if let Some(old) = m.borrow_mut().take() {
+                            let _: () = msg_send![old, stopAccelerometerUpdates];
+                            let _: () = msg_send![old, stopGyroUpdates];
+                            objc_release(old);
+                        }
+                        *m.borrow_mut() = Some(mgr);
+                    });
+                }
+            }
+            Mutation::StopMotion => {
+                MOTION_MANAGER.with(|m| {
+                    if let Some(mgr) = m.borrow_mut().take() {
+                        unsafe {
+                            let _: () = msg_send![mgr, stopAccelerometerUpdates];
+                            let _: () = msg_send![mgr, stopGyroUpdates];
                             objc_release(mgr);
                         }
                     }

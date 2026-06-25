@@ -110,6 +110,7 @@ pub struct Text<M, T: IntoText<M>> {
     align: Option<rax_dom::TextAlign>,
     number_of_lines: Option<u32>,
     font_family: Option<String>,
+    text_style: Option<rax_dom::TextStyle>,
     _marker: PhantomData<fn() -> M>,
 }
 
@@ -124,6 +125,7 @@ pub fn text<M, T: IntoText<M>>(value: T) -> Text<M, T> {
         align: None,
         number_of_lines: None,
         font_family: None,
+        text_style: None,
         _marker: PhantomData,
     }
 }
@@ -185,6 +187,14 @@ impl<M, T: IntoText<M>> Text<M, T> {
         self.font_family = Some(name.into());
         self
     }
+
+    /// Applies a Dynamic Type semantic text style that scales with the user's
+    /// preferred reading size. Overrides any fixed `font_size` set earlier.
+    #[must_use]
+    pub fn text_style(mut self, style: rax_dom::TextStyle) -> Self {
+        self.text_style = Some(style);
+        self
+    }
 }
 
 impl<M, T: IntoText<M>> View for Text<M, T> {
@@ -211,6 +221,9 @@ impl<M, T: IntoText<M>> View for Text<M, T> {
         }
         if let Some(family) = self.font_family {
             tree.set(id, Attribute::FontFamily(family));
+        }
+        if let Some(style) = self.text_style {
+            tree.set(id, Attribute::TextStyle(style));
         }
         self.value.apply(tree, id);
         id

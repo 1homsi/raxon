@@ -185,6 +185,16 @@ impl Tree {
         self.host.emit(Mutation::StopLocation);
     }
 
+    /// Starts CoreMotion sensor updates. Results arrive as global `Event::MotionUpdated`.
+    pub fn start_motion(&mut self, accelerometer: bool, gyroscope: bool) {
+        self.host.emit(Mutation::StartMotion { accelerometer, gyroscope });
+    }
+
+    /// Stops CoreMotion sensor updates.
+    pub fn stop_motion(&mut self) {
+        self.host.emit(Mutation::StopMotion);
+    }
+
     /// Emits a content-size update for a scroll container.
     pub fn set_content_size(&mut self, id: WidgetId, size: rax_core::Size) {
         if self.nodes.get(id.0).is_some() {

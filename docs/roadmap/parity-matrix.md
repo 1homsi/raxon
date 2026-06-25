@@ -66,7 +66,7 @@ Flutter offer, plus Rust-only advantages. Columns: does the ecosystem support it
 | Typed routes | partial | partial | ✅ |
 | Deep / universal links | ✓ | ✓ | ✅ (`on_deep_link` — openURL: bridged to `Event::DeepLink`) |
 | Shared-element transitions | community | ✓ (Hero) | ⬜ |
-| State restoration | ✓ | ✓ | ⬜ |
+| State restoration | ✓ | ✓ | ✅ (`save_ui_state` / `restore_ui_state`; session-scoped + KV store for cross-restart) |
 | Custom transitions | ✓ | ✓ | ⬜ |
 
 ## Animation & gestures
@@ -86,7 +86,7 @@ Flutter offer, plus Rust-only advantages. Columns: does the ecosystem support it
 |---|---|---|---|
 | Font weight / italic / align | ✓ | ✓ | ✅ |
 | Rich text / spans | ✓ | ✓ | ✅ (`rich_text().span(TextSpan)` — NSAttributedString font/color/underline) |
-| Custom fonts / dynamic type | ✓ | ✓ | ✅ custom font family (`font_family()`); ⬜ dynamic type |
+| Custom fonts / dynamic type | ✓ | ✓ | ✅ font_family + `.text_style(TextStyle::Body/…)` (UIFont preferredFontForTextStyle) |
 | RTL / bidi | ✓ | ✓ | ✅ (`.direction(LayoutDirection::Rtl)` — UISemanticContentAttribute) |
 | i18n (catalog + interpolation) | community | ✓ (intl) | 🟡 (ICU/plurals later) |
 | Screen-reader labels + roles | ✓ | ✓ | ✅ (`.accessibility_label/hint/role/hidden()` — UIAccessibilityTraits) |
@@ -113,7 +113,7 @@ Flutter offer, plus Rust-only advantages. Columns: does the ecosystem support it
 | BLE / NFC | community | plugins | ⬜ |
 | Biometrics / secure auth | ✓ | ✓ | 🟡 biometrics ✅ (`authenticate_biometric`); OAuth/passkeys ⬜ |
 | In-app purchases | ✓ | ✓ | ⬜ |
-| Sensors / haptics / background tasks | ✓ | ✓ | 🟡 haptics ✅ (`haptic(HapticStyle)`); sensors/background ⬜ |
+| Sensors / haptics / background tasks | ✓ | ✓ | 🟡 haptics ✅ + sensors ✅ (CMMotionManager accel/gyro → Event::MotionUpdated); background ⬜ |
 | Plugin system / native modules | ✓ | ✓ | ✅ (`rax-plugin`: Plugin trait + PluginRegistry; on_start/tick/stop/event hooks) |
 
 ## Platforms
@@ -128,7 +128,7 @@ Flutter offer, plus Rust-only advantages. Columns: does the ecosystem support it
 ## Tooling
 | Capability | RN | Flutter | rax |
 |---|---|---|---|
-| CLI + project gen | ✓ | ✓ | ⬜ |
+| CLI + project gen | ✓ | ✓ | ✅ (`rax new <name>` scaffolds Cargo.toml + src/lib.rs + .gitignore) |
 | Hot reload / fast refresh | ✓ | ✓ | ⬜ |
 | DevTools / inspector | ✓ | ✓ | ⬜ |
 | Error overlay | ✓ | ✓ | ✅ (`install_error_overlay()` panic hook + `error_overlay(signal)` composable) |

@@ -19,7 +19,7 @@ use rax_reactive::{create_root, create_signal, provide_context, use_context, Sco
 use rax_view::{mount, View};
 
 // Re-export so callers can name the type without reaching into rax-dom.
-pub use rax_dom::{HapticStyle, KeyboardType, LocalNotification};
+pub use rax_dom::{HapticStyle, KeyboardType, LocalNotification, TextStyle};
 
 thread_local! {
     /// Haptic pulses queued by [`haptic`] during event handlers. Drained by
@@ -50,6 +50,19 @@ thread_local! {
     /// Whether a location-stop was requested (via [`stop_location`]). Drained by [`App::tick`].
     static PENDING_LOCATION_STOPS: RefCell<bool> =
         const { RefCell::new(false) };
+
+    /// Motion-start requests queued by [`start_motion`]. Drained by [`App::tick`].
+    static PENDING_MOTION_STARTS: RefCell<Option<(bool, bool)>> =
+        const { RefCell::new(None) };
+
+    /// Whether a motion-stop was requested (via [`stop_motion`]). Drained by [`App::tick`].
+    static PENDING_MOTION_STOPS: RefCell<bool> =
+        const { RefCell::new(false) };
+
+    /// In-process UI state (session lifetime only). Cross-restart persistence
+    /// should be done via `rax::store::store_set` / `store_get`.
+    static UI_STATE: RefCell<std::collections::HashMap<String, String>> =
+        RefCell::new(std::collections::HashMap::new());
 }
 
 // ---------------------------------------------------------------------------
@@ -259,6 +272,73 @@ pub fn start_location() {
 /// Stops GPS location updates.
 pub fn stop_location() {
     PENDING_LOCATION_STOPS.with(|q| *q.borrow_mut() = true);
+}
+
+/// Starts CoreMotion accelerometer and/or gyroscope updates.
+/// Results arrive as global `Event::MotionUpdated` on each frame tick (~60 Hz).
+///
+/// ```no_run
+/// use rax_runtime::start_motion;
+///
+/// start_motion(true, true); // enable both accelerometer and gyroscope
+/// ```
+pub fn start_motion(accelerometer: bool, gyroscope: bool) {
+    PENDING_MOTION_STARTS.with(|q| *q.borrow_mut() = Some((accelerometer, gyroscope)));
+}
+
+/// Stops CoreMotion sensor updates.
+///
+/// ```no_run
+/// use rax_runtime::stop_motion;
+///
+/// stop_motion();
+/// ```
+pub fn stop_motion() {
+    PENDING_MOTION_STOPS.with(|q| *q.borrow_mut() = true);
+}
+
+/// Saves a UI state value for the current session.
+///
+/// Use this to persist navigation state (current tab, stack depth, scroll
+/// position, etc.) so it can be restored within a single app session.
+///
+/// For persistence across app restarts, use `rax::store::store_set`.
+///
+/// ```no_run
+/// use rax_runtime::save_ui_state;
+///
+/// save_ui_state("selected_tab", "2");
+/// ```
+pub fn save_ui_state(key: impl Into<String>, value: impl Into<String>) {
+    UI_STATE.with(|m| {
+        m.borrow_mut().insert(key.into(), value.into());
+    });
+}
+
+/// Restores a UI state value saved by [`save_ui_state`].
+///
+/// Returns `None` if the key was never set or was cleared.
+///
+/// ```no_run
+/// use rax_runtime::restore_ui_state;
+///
+/// let tab = restore_ui_state("selected_tab").unwrap_or_else(|| "0".to_string());
+/// ```
+pub fn restore_ui_state(key: impl Into<String>) -> Option<String> {
+    UI_STATE.with(|m| m.borrow().get(&key.into()).cloned())
+}
+
+/// Clears a UI state value saved by [`save_ui_state`].
+///
+/// ```no_run
+/// use rax_runtime::clear_ui_state;
+///
+/// clear_ui_state("selected_tab");
+/// ```
+pub fn clear_ui_state(key: impl Into<String>) {
+    UI_STATE.with(|m| {
+        m.borrow_mut().remove(&key.into());
+    });
 }
 
 /// A running application: a mounted view tree plus the per-frame drive loop.
@@ -499,6 +579,20 @@ impl App {
         }
         if want_stop {
             self.tree.stop_location();
+        }
+
+        // Drain motion start/stop requests.
+        let motion_start = PENDING_MOTION_STARTS.with(|q| q.borrow_mut().take());
+        let motion_stop = PENDING_MOTION_STOPS.with(|q| {
+            let v = *q.borrow();
+            *q.borrow_mut() = false;
+            v
+        });
+        if let Some((accel, gyro)) = motion_start {
+            self.tree.start_motion(accel, gyro);
+        }
+        if motion_stop {
+            self.tree.stop_motion();
         }
 
         self.tree.run_dynamic(); // events/async/anim may have dirtied dynamic subtrees

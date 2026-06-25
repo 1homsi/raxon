@@ -78,7 +78,7 @@ pub use view::{boxed, BoxedView, View, ViewSequence};
 pub use rax_core::{AlignItems, Dimension, EdgeInsets, FlexWrap, JustifyContent, Position};
 pub use rax_dom::{
     GesturePhase, KeyboardType, LayoutDirection, LinearGradient, ReturnKeyType, Role, TextAlign,
-    Transform,
+    TextStyle, Transform,
 };
 
 use rax_dom::{Tree, WidgetId};

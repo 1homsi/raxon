@@ -92,9 +92,11 @@ pub mod prelude {
 
     // The app entry point and runtime, plus appearance controls.
     pub use rax_runtime::{
-        authenticate_biometric, cancel_notification, haptic, install_error_overlay, last_panic,
-        on_deep_link, schedule_notification, set_backdrop, use_color_scheme, App, Backdrop,
-        HapticStyle, KeyboardType, LocalNotification,
+        authenticate_biometric, cancel_notification, clear_ui_state, haptic,
+        install_error_overlay, last_panic, on_deep_link, restore_ui_state, save_ui_state,
+        schedule_notification, set_backdrop, start_location, start_motion, stop_location,
+        stop_motion, use_color_scheme, App, Backdrop, HapticStyle, KeyboardType, LocalNotification,
+        TextStyle,
     };
 
     // High-frequency helpers from the satellite crates. Full surfaces live in

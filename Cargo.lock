@@ -797,6 +797,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "rax-cli"
+version = "0.1.0"
+
+[[package]]
 name = "rax-core"
 version = "0.0.1"
 

@@ -304,6 +304,36 @@ pub enum Attribute {
     Url(String),
     /// Raw HTML to load in a WebView widget.
     Html(String),
+    /// Use a dynamic-type text style instead of a fixed font size.
+    TextStyle(TextStyle),
+}
+
+/// A semantic text style that scales with the user's preferred reading size
+/// (maps to `UIFontTextStyle` on iOS).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextStyle {
+    /// Large title.
+    LargeTitle,
+    /// Title 1.
+    Title1,
+    /// Title 2.
+    Title2,
+    /// Title 3.
+    Title3,
+    /// Headline.
+    Headline,
+    /// Subheadline.
+    Subheadline,
+    /// Body text.
+    Body,
+    /// Callout.
+    Callout,
+    /// Footnote.
+    Footnote,
+    /// Caption 1.
+    Caption1,
+    /// Caption 2.
+    Caption2,
 }
 
 /// A text span with inline styling.
@@ -573,4 +603,13 @@ pub enum Mutation {
     StartLocation,
     /// Stop location updates.
     StopLocation,
+    /// Start motion sensor updates. Delivers `Event::MotionUpdated` at ~60 Hz.
+    StartMotion {
+        /// true = enable accelerometer updates.
+        accelerometer: bool,
+        /// true = enable gyroscope updates.
+        gyroscope: bool,
+    },
+    /// Stop motion sensor updates.
+    StopMotion,
 }

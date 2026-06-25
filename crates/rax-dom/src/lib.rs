@@ -33,5 +33,5 @@ mod tree;
 
 pub use backend::{Backend, Host, RecordingBackend};
 pub use event::{Event, EventKind, EventSink, Lifecycle, PointerId, TextSelection};
-pub use mutation::{Attribute, Axis, Mutation, WidgetId, WidgetKind};
+pub use mutation::{Attribute, Mutation, WidgetId, WidgetKind};
 pub use tree::Tree;

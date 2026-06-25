@@ -8,12 +8,15 @@
 
 use std::sync::mpsc::{channel, Receiver, Sender};
 
-use rax_core::Arena;
+use rax_core::{Arena, LayoutStyle};
 use rax_reactive::{create_effect, Effect};
 
 use crate::backend::Host;
 use crate::event::{Event, EventKind, EventSink};
 use crate::mutation::{Attribute, Mutation, WidgetId, WidgetKind};
+
+/// Default font size (logical points) used for text measurement until set.
+const DEFAULT_FONT_SIZE: f32 = 16.0;
 
 /// A registered event handler and the kind of event it responds to.
 struct Handler {
@@ -22,11 +25,13 @@ struct Handler {
 }
 
 struct ElementNode {
-    // Read back once the reconciler/inspector land (they match on node kind).
-    #[allow(dead_code)]
     kind: WidgetKind,
     parent: Option<WidgetId>,
     children: Vec<WidgetId>,
+    /// Retained layout inputs, consumed by the layout pass.
+    style: LayoutStyle,
+    /// Font size, captured from paint attributes, used for text measurement.
+    font_size: f32,
     /// Reactive bindings owned by this node, disposed when it is removed.
     effects: Vec<Effect>,
     /// Event handlers, dropped when the node is removed.
@@ -90,6 +95,8 @@ impl Tree {
             kind,
             parent: None,
             children: Vec::new(),
+            style: LayoutStyle::default(),
+            font_size: DEFAULT_FONT_SIZE,
             effects: Vec::new(),
             handlers: Vec::new(),
         });
@@ -98,11 +105,24 @@ impl Tree {
         id
     }
 
-    /// Sets a static attribute that never changes.
-    pub fn set(&mut self, id: WidgetId, attr: Attribute) {
-        if self.nodes.get(id.0).is_some() {
-            self.host.emit(Mutation::SetAttribute { id, attr });
+    /// Sets the retained layout style for a node (consumed by the layout pass,
+    /// not forwarded to the backend).
+    pub fn set_style(&mut self, id: WidgetId, style: LayoutStyle) {
+        if let Some(node) = self.nodes.get_mut(id.0) {
+            node.style = style;
         }
+    }
+
+    /// Sets a paint attribute, forwarding it to the backend. Font size is also
+    /// captured for text measurement.
+    pub fn set(&mut self, id: WidgetId, attr: Attribute) {
+        let Some(node) = self.nodes.get_mut(id.0) else {
+            return;
+        };
+        if let Attribute::FontSize(size) = attr {
+            node.font_size = size;
+        }
+        self.host.emit(Mutation::SetAttribute { id, attr });
     }
 
     /// Binds an attribute to a reactive computation.
@@ -316,5 +336,23 @@ impl Tree {
             Some(n) => &n.children,
             None => &[],
         }
+    }
+
+    /// The widget kind of `id`, if known.
+    pub fn kind_of(&self, id: WidgetId) -> Option<WidgetKind> {
+        self.nodes.get(id.0).map(|n| n.kind)
+    }
+
+    /// The retained layout style of `id`, if known.
+    pub fn style_of(&self, id: WidgetId) -> Option<LayoutStyle> {
+        self.nodes.get(id.0).map(|n| n.style)
+    }
+
+    /// The font size of `id` (defaults to 16pt), used for text measurement.
+    pub fn font_size_of(&self, id: WidgetId) -> f32 {
+        self.nodes
+            .get(id.0)
+            .map(|n| n.font_size)
+            .unwrap_or(DEFAULT_FONT_SIZE)
     }
 }

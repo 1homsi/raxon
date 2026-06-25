@@ -15,7 +15,9 @@ extern crate alloc;
 pub mod arena;
 pub mod color;
 pub mod geometry;
+pub mod style;
 
 pub use arena::{Arena, Index};
 pub use color::Color;
 pub use geometry::{EdgeInsets, Point, Rect, Size};
+pub use style::{AlignItems, Dimension, FlexDirection, LayoutStyle};

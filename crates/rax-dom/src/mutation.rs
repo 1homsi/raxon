@@ -7,7 +7,7 @@
 //! the whole framework testable with zero platform code (assert on the stream)
 //! and is the seam that later allows diffing off the main thread.
 
-use rax_core::{Color, EdgeInsets, Index};
+use rax_core::{Color, Index, Rect};
 
 /// A stable handle to a node in the retained element tree (and, 1:1, to a native
 /// view created by the backend).
@@ -34,23 +34,15 @@ pub enum WidgetKind {
     Button,
 }
 
-/// Primary axis of a flex container.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Axis {
-    /// Lay children out top-to-bottom (a column).
-    Vertical,
-    /// Lay children out left-to-right (a row).
-    Horizontal,
-}
-
-/// A single settable property on a widget.
+/// A single settable **paint** property on a widget.
 ///
-/// A flat enum (rather than per-widget typed structs) keeps the backend boundary
-/// simple and the mutation stream trivially comparable in tests. Type-safe,
-/// per-widget builders live one layer up; they lower to these.
+/// These are forwarded to the backend and not retained. Layout *inputs*
+/// (direction, padding, gap, size) are not here — they live in
+/// [`LayoutStyle`](rax_core::LayoutStyle), retained on the node, and produce
+/// [`Mutation::SetFrame`] via the layout pass.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Attribute {
-    /// Text content (valid on [`WidgetKind::Text`]).
+    /// Text content (valid on [`WidgetKind::Text`]/[`WidgetKind::Button`]).
     Text(String),
     /// Font size in logical pixels.
     FontSize(f32),
@@ -58,12 +50,6 @@ pub enum Attribute {
     TextColor(Color),
     /// Background fill.
     BackgroundColor(Color),
-    /// Inner padding.
-    Padding(EdgeInsets),
-    /// Primary layout axis of a container.
-    FlexDirection(Axis),
-    /// Spacing between children along the primary axis.
-    Gap(f32),
 }
 
 /// One atomic change to the native view tree.
@@ -76,12 +62,20 @@ pub enum Mutation {
         /// What to create.
         kind: WidgetKind,
     },
-    /// Set or update a property on an existing widget.
+    /// Set or update a paint property on an existing widget.
     SetAttribute {
         /// Target widget.
         id: WidgetId,
         /// Property to apply.
         attr: Attribute,
+    },
+    /// Position and size a widget's native view (output of the layout pass), in
+    /// the coordinate space of its parent.
+    SetFrame {
+        /// Target widget.
+        id: WidgetId,
+        /// New frame.
+        rect: Rect,
     },
     /// Insert `child` into `parent`'s child list at `index`.
     InsertChild {

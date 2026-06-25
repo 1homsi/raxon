@@ -42,8 +42,13 @@ fn counter_builds_initial_tree() {
 
     let root = mount(&mut tree, counter(count));
 
+    // Layout style is retained on the node (not a paint mutation).
+    let style = tree.style_of(root).unwrap();
+    assert_eq!(style.direction, rax_core::FlexDirection::Column);
+    assert_eq!(style.gap, 8.0);
+    assert_eq!(style.padding, rax_core::EdgeInsets::all(16.0));
+
     let muts = log.borrow();
-    // The container is a View laid out vertically with padding + gap.
     assert_eq!(
         muts[0],
         Mutation::Create {
@@ -51,13 +56,6 @@ fn counter_builds_initial_tree() {
             kind: WidgetKind::View
         }
     );
-    assert!(muts.contains(&Mutation::SetAttribute {
-        id: root,
-        attr: Attribute::FlexDirection(rax_dom::Axis::Vertical),
-    }));
-    assert!(muts
-        .iter()
-        .any(|m| matches!(m, Mutation::SetAttribute { attr: Attribute::Gap(g), .. } if *g == 8.0)));
     // It contains a text label and a button.
     assert!(find_text(&muts, "Count: 0"));
     assert_eq!(tree.children_of(root).len(), 2);

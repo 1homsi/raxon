@@ -1,0 +1,20 @@
+[package]
+name = "rax-layout"
+description = "Flexbox layout for rax, wrapping taffy behind the engine's neutral LayoutStyle."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints.rust]
+missing_docs = "warn"
+unsafe_code = "forbid"
+
+[dependencies]
+rax-core = { path = "../rax-core" }
+rax-dom = { path = "../rax-dom" }
+taffy = "0.7"
+
+[dev-dependencies]
+rax-reactive = { path = "../rax-reactive" }

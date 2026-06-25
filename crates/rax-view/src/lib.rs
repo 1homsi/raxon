@@ -53,7 +53,7 @@ pub use container::{column, row, Container};
 pub use controls::{slider, switch, Slider, Switch};
 pub use dynamic::{dynamic, Dynamic};
 pub use extras::{divider, vertical_divider};
-pub use image::{image, Image};
+pub use image::{icon, image, Image};
 pub use indicators::{activity_indicator, progress, ActivityIndicator, Progress};
 pub use list::{each, show};
 pub use modifier::{Decorated, Styled, ViewExt};

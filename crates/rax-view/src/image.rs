@@ -19,6 +19,13 @@ pub fn image(source: impl Into<String>) -> Image {
     }
 }
 
+/// Creates a vector icon by name (e.g. an SF Symbol such as `"gearshape.fill"`).
+/// Same as [`image`], but reads as an icon at the call site; size it with
+/// `.size(..)` and color it with `.tint(..)`.
+pub fn icon(name: impl Into<String>) -> Image {
+    image(name)
+}
+
 impl Image {
     /// Tints a template/symbol image with `color`.
     #[must_use]

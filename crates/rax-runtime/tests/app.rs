@@ -125,3 +125,68 @@ fn safe_area_insets_offset_and_shrink_the_root() {
         "root sits inside the safe area"
     );
 }
+
+#[test]
+fn keyboard_inset_shrinks_content_from_the_bottom() {
+    use rax_core::{EdgeInsets, Rect};
+
+    let backend = RecordingBackend::new();
+    let log = backend.log();
+    let count = create_signal(0);
+    let mut app = App::new(Host::new(backend), Size::new(320.0, 640.0), move || {
+        counter(count)
+    });
+    app.set_safe_area(EdgeInsets {
+        top: 47.0,
+        right: 0.0,
+        bottom: 34.0,
+        left: 0.0,
+    });
+
+    log.borrow_mut().clear();
+    app.set_keyboard_inset(300.0); // keyboard taller than the home indicator
+
+    let muts = log.borrow();
+    assert!(
+        muts.iter().any(|m| matches!(
+            m,
+            Mutation::SetFrame { id, rect }
+                if *id == app.root()
+                    && *rect == Rect::new(0.0, 47.0, 320.0, 640.0 - 47.0 - 300.0)
+        )),
+        "keyboard inset (max with safe-area bottom) shrinks the root"
+    );
+}
+
+#[test]
+fn backdrop_resolves_with_color_scheme() {
+    use rax_core::{Color, ColorScheme};
+    use rax_runtime::{set_backdrop, Backdrop};
+
+    let backend = RecordingBackend::new();
+    let log = backend.log();
+    let light = Color::rgb(250, 250, 250);
+    let dark = Color::rgb(10, 10, 10);
+
+    let mut app = App::new(Host::new(backend), Size::new(320.0, 640.0), move || {
+        set_backdrop(Backdrop::System { light, dark });
+        text("hi")
+    });
+
+    // Built in light mode → light backdrop emitted.
+    assert!(
+        log.borrow()
+            .iter()
+            .any(|m| matches!(m, Mutation::SetBackdrop { color } if *color == light)),
+        "initial backdrop resolves to light"
+    );
+
+    log.borrow_mut().clear();
+    app.set_color_scheme(ColorScheme::Dark);
+    assert!(
+        log.borrow()
+            .iter()
+            .any(|m| matches!(m, Mutation::SetBackdrop { color } if *color == dark)),
+        "switching to dark re-resolves the backdrop"
+    );
+}

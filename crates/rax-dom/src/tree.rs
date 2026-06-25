@@ -162,6 +162,11 @@ impl Tree {
         }
     }
 
+    /// Emits a backdrop-color update (the fill behind the root / safe area).
+    pub fn set_backdrop(&mut self, color: rax_core::Color) {
+        self.host.emit(Mutation::SetBackdrop { color });
+    }
+
     fn create(&mut self, kind: WidgetKind) -> WidgetId {
         let index = self.nodes.insert(ElementNode {
             kind,

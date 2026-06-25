@@ -23,10 +23,11 @@ use objc2_ui_kit::{
     UIButtonType, UIColor, UIControl, UIControlEvents, UIControlState, UIFont, UIGestureRecognizer,
     UIGestureRecognizerState, UIImage, UIImageView, UILabel, UILongPressGestureRecognizer,
     UIProgressView, UIScreen, UIScrollView, UISegmentedControl, UISlider, UIStepper, UISwitch,
-    UITapGestureRecognizer, UITextBorderStyle, UITextField, UIView, UIViewController, UIWindow,
+    UITapGestureRecognizer, UITextBorderStyle, UITextField, UITraitEnvironment,
+    UIUserInterfaceStyle, UIView, UIViewController, UIWindow,
 };
 
-use rax_core::{Color, EdgeInsets, Rect, Size};
+use rax_core::{Color, ColorScheme, EdgeInsets, Rect, Size};
 use rax_dom::{
     Attribute, Backend, Event, EventSink, GestureKind, Host, Mutation, TextSelection, WidgetId,
     WidgetKind,
@@ -73,7 +74,17 @@ fn handle_tick() {
             // Feed the platform safe-area insets to the runtime each frame; it
             // only re-lays-out when they actually change.
             let insets = state._window.safeAreaInsets();
+            // Report the system appearance so dark/light-aware backdrops and
+            // content can adapt.
+            let scheme = if unsafe { state._window.traitCollection().userInterfaceStyle() }
+                == UIUserInterfaceStyle::Dark
+            {
+                ColorScheme::Dark
+            } else {
+                ColorScheme::Light
+            };
             let mut app = state.app.borrow_mut();
+            app.set_color_scheme(scheme);
             app.set_safe_area(EdgeInsets {
                 top: insets.top as f32,
                 right: insets.right as f32,
@@ -740,6 +751,12 @@ impl Backend for UiKitBackend {
                         };
                     }
                 }
+            }
+            Mutation::SetBackdrop { color } => {
+                // The container fills the whole window (under the safe areas);
+                // coloring it fills the notch/home-indicator region behind the
+                // inset app content.
+                unsafe { self.container.setBackgroundColor(Some(&to_ui_color(color))) };
             }
         }
     }

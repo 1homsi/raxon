@@ -82,10 +82,10 @@ pub mod prelude {
     pub use rax_reactive::*;
 
     // Core value types not already surfaced via the view layer.
-    pub use rax_core::{Color, FlexDirection, LayoutStyle, Point, Rect, Size};
+    pub use rax_core::{Color, ColorScheme, FlexDirection, LayoutStyle, Point, Rect, Size};
 
-    // The app entry point and runtime.
-    pub use rax_runtime::App;
+    // The app entry point and runtime, plus appearance controls.
+    pub use rax_runtime::{set_backdrop, use_color_scheme, App, Backdrop};
 
     // High-frequency helpers from the satellite crates. Full surfaces live in
     // the namespaced modules (`rax::nav`, `rax::store`, …).

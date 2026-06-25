@@ -18,7 +18,7 @@ pub mod geometry;
 pub mod style;
 
 pub use arena::{Arena, Index};
-pub use color::Color;
+pub use color::{Color, ColorScheme};
 pub use geometry::{EdgeInsets, Point, Rect, Size};
 pub use style::{
     AlignItems, Dimension, FlexDirection, FlexWrap, JustifyContent, LayoutStyle, Position,

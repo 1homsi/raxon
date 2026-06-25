@@ -54,6 +54,23 @@ impl Color {
     }
 }
 
+/// The system appearance, reported by the platform.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum ColorScheme {
+    /// Light mode (the default).
+    #[default]
+    Light,
+    /// Dark mode.
+    Dark,
+}
+
+impl ColorScheme {
+    /// Whether this is the dark scheme.
+    pub const fn is_dark(self) -> bool {
+        matches!(self, ColorScheme::Dark)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

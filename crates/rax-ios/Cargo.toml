@@ -54,6 +54,8 @@ objc2-ui-kit = { version = "0.3", features = [
     "UIScrollView",
     "UIActivityIndicatorView",
     "UIProgressView",
+    "UITraitCollection",
+    "UIInterface",
 ] }
 objc2-quartz-core = { version = "0.3", features = ["CADisplayLink", "CALayer"] }
 objc2-core-foundation = { version = "0.3", features = ["CFCGTypes"] }

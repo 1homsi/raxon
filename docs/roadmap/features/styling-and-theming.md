@@ -37,6 +37,9 @@ Typed, predictable styling with a runtime-switchable theme system. The core of
 - ✅ `Theme` context (scoped/nested themes)
 - ✅ runtime theme switching (no rebuild) via signals — only affected props update
 - 🟡 light / dark / high-contrast modes; system-driven + manual override
+  - ✅ reactive system color-scheme signal (`use_color_scheme`) — content auto-adapts to OS light/dark
+  - ✅ safe-area backdrop: fixed color or `System { light, dark }` auto-following appearance
+  - ⬜ high-contrast; manual app-level override of the system scheme
 - ⬜ brand theme packages (publishable, composable)
 - ⬜ component registry: override any built-in widget app-wide
 - ⬜ per-platform theme overrides (native-feel iOS vs Android vs your own)

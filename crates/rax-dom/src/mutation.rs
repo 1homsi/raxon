@@ -249,4 +249,11 @@ pub enum Mutation {
         /// Total content size.
         size: Size,
     },
+    /// Set the backdrop fill shown behind the root — i.e. the safe-area region
+    /// (notch/status-bar/home-indicator) not covered by app content. Applied to
+    /// the platform window, not any widget.
+    SetBackdrop {
+        /// The backdrop color.
+        color: Color,
+    },
 }

@@ -35,7 +35,10 @@
 
 mod button;
 mod container;
+mod controls;
 mod dynamic;
+mod extras;
+mod image;
 mod modifier;
 mod spacer;
 mod text;
@@ -43,7 +46,10 @@ mod view;
 
 pub use button::{button, Button};
 pub use container::{column, row, Container};
+pub use controls::{slider, switch, Slider, Switch};
 pub use dynamic::{dynamic, Dynamic};
+pub use extras::{divider, vertical_divider};
+pub use image::{image, Image};
 pub use modifier::{Decorated, Styled, ViewExt};
 pub use spacer::{spacer, Spacer};
 pub use text::{text, DynamicText, IntoText, StaticText, Text};

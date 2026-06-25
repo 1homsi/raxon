@@ -111,6 +111,13 @@ pub enum Event {
         /// Whether it is now focused.
         focused: bool,
     },
+    /// A control's value changed (switch on/off as 0/1, slider position, etc.).
+    ValueChanged {
+        /// The control.
+        target: WidgetId,
+        /// New value.
+        value: f64,
+    },
     /// Android system back / iOS interactive-pop intent. App-global.
     BackPressed,
     /// The soft keyboard is about to appear, occupying `frame`. App-global.
@@ -142,6 +149,8 @@ pub enum EventKind {
     TextChanged,
     /// [`Event::FocusChanged`].
     FocusChanged,
+    /// [`Event::ValueChanged`].
+    ValueChanged,
     /// [`Event::BackPressed`].
     BackPressed,
     /// [`Event::KeyboardWillShow`].
@@ -163,6 +172,7 @@ impl Event {
             Event::ScrollChanged { .. } => EventKind::ScrollChanged,
             Event::TextChanged { .. } => EventKind::TextChanged,
             Event::FocusChanged { .. } => EventKind::FocusChanged,
+            Event::ValueChanged { .. } => EventKind::ValueChanged,
             Event::BackPressed => EventKind::BackPressed,
             Event::KeyboardWillShow { .. } => EventKind::KeyboardWillShow,
             Event::KeyboardWillHide => EventKind::KeyboardWillHide,
@@ -180,7 +190,8 @@ impl Event {
             | Event::PointerUp { target, .. }
             | Event::ScrollChanged { target, .. }
             | Event::TextChanged { target, .. }
-            | Event::FocusChanged { target, .. } => Some(target),
+            | Event::FocusChanged { target, .. }
+            | Event::ValueChanged { target, .. } => Some(target),
             Event::BackPressed
             | Event::KeyboardWillShow { .. }
             | Event::KeyboardWillHide

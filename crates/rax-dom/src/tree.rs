@@ -110,6 +110,21 @@ impl Tree {
         self.create(WidgetKind::Button)
     }
 
+    /// Creates an image view.
+    pub fn create_image(&mut self) -> WidgetId {
+        self.create(WidgetKind::Image)
+    }
+
+    /// Creates an on/off switch.
+    pub fn create_switch(&mut self) -> WidgetId {
+        self.create(WidgetKind::Switch)
+    }
+
+    /// Creates a value slider.
+    pub fn create_slider(&mut self) -> WidgetId {
+        self.create(WidgetKind::Slider)
+    }
+
     fn create(&mut self, kind: WidgetKind) -> WidgetId {
         let index = self.nodes.insert(ElementNode {
             kind,

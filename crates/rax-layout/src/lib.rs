@@ -233,6 +233,10 @@ fn measure_leaf(
         // Buttons add horizontal title padding and have a minimum tap height.
         WidgetKind::Button => (glyphs * glyph_w + 36.0, line_h.max(44.0)),
         WidgetKind::Text => (glyphs * glyph_w + 6.0, line_h),
+        // Native control intrinsic sizes (UISwitch/UISlider standards).
+        WidgetKind::Switch => (51.0, 31.0),
+        WidgetKind::Slider => (160.0, 31.0),
+        WidgetKind::Image => (44.0, 44.0),
         WidgetKind::View => (0.0, 0.0),
     };
 

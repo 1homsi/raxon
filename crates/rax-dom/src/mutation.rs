@@ -44,6 +44,12 @@ pub enum WidgetKind {
     Text,
     /// A tappable button (maps to `UIButton` / `Button`).
     Button,
+    /// An image view (maps to `UIImageView` / `ImageView`).
+    Image,
+    /// An on/off switch (maps to `UISwitch` / `Switch`).
+    Switch,
+    /// A value slider (maps to `UISlider` / `SeekBar`).
+    Slider,
 }
 
 /// A single settable **paint** property on a widget.
@@ -72,6 +78,14 @@ pub enum Attribute {
     BorderColor(Color),
     /// Drop shadow.
     Shadow(Shadow),
+    /// Image source: an asset name or system-symbol name.
+    ImageSource(String),
+    /// Boolean value (e.g. a switch's on/off state).
+    BoolValue(bool),
+    /// Floating-point value (e.g. a slider's position, `0.0..=1.0`).
+    FloatValue(f32),
+    /// Tint color (e.g. image tint, control accent).
+    TintColor(Color),
 }
 
 /// A drop shadow specification.

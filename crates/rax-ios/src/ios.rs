@@ -19,8 +19,9 @@ use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_foundation::{NSNotification, NSString};
 use objc2_quartz_core::CADisplayLink;
 use objc2_ui_kit::{
-    UIApplication, UIApplicationDelegate, UIButton, UIButtonType, UIColor, UIControlEvents,
-    UIControlState, UIFont, UILabel, UIScreen, UIView, UIViewController, UIWindow,
+    UIApplication, UIApplicationDelegate, UIButton, UIButtonType, UIColor, UIControl,
+    UIControlEvents, UIControlState, UIFont, UIImage, UIImageView, UILabel, UIScreen, UISlider,
+    UISwitch, UIView, UIViewController, UIWindow,
 };
 
 use rax_core::{Color, Rect, Size};
@@ -69,6 +70,18 @@ fn handle_tick() {
     });
 }
 
+fn handle_value_changed(tag_bits: u64, value: f64) {
+    STATE.with(|s| {
+        if let Some(state) = s.borrow().as_ref() {
+            state.event_sink.dispatch(Event::ValueChanged {
+                target: WidgetId::from_u64(tag_bits),
+                value,
+            });
+            state.app.borrow_mut().tick();
+        }
+    });
+}
+
 // ---------------------------------------------------------------------------
 // Objective-C glue classes (no Rust ivars; they read the thread-local STATE).
 // ---------------------------------------------------------------------------
@@ -86,6 +99,23 @@ define_class!(
         fn did_tap(&self, sender: &UIButton) {
             let tag = unsafe { sender.tag() };
             handle_tap(tag as u64);
+        }
+
+        #[unsafe(method(valueChanged:))]
+        fn value_changed(&self, sender: &UIControl) {
+            let tag = unsafe { sender.tag() } as u64;
+            let value = if let Some(sw) = sender.downcast_ref::<UISwitch>() {
+                if unsafe { sw.isOn() } {
+                    1.0
+                } else {
+                    0.0
+                }
+            } else if let Some(sl) = sender.downcast_ref::<UISlider>() {
+                unsafe { sl.value() as f64 }
+            } else {
+                0.0
+            };
+            handle_value_changed(tag, value);
         }
     }
 );
@@ -272,6 +302,37 @@ impl Backend for UiKitBackend {
                         }
                         button.into_super().into_super()
                     }
+                    WidgetKind::Image => {
+                        let iv: Retained<UIImageView> =
+                            unsafe { UIImageView::initWithFrame(self.mtm.alloc(), zero) };
+                        iv.into_super()
+                    }
+                    WidgetKind::Switch => {
+                        let sw: Retained<UISwitch> =
+                            unsafe { UISwitch::initWithFrame(self.mtm.alloc(), zero) };
+                        unsafe {
+                            sw.addTarget_action_forControlEvents(
+                                Some(&self.action_target),
+                                sel!(valueChanged:),
+                                UIControlEvents::ValueChanged,
+                            );
+                            sw.setTag(id.to_u64() as isize);
+                        }
+                        sw.into_super().into_super()
+                    }
+                    WidgetKind::Slider => {
+                        let sl: Retained<UISlider> =
+                            unsafe { UISlider::initWithFrame(self.mtm.alloc(), zero) };
+                        unsafe {
+                            sl.addTarget_action_forControlEvents(
+                                Some(&self.action_target),
+                                sel!(valueChanged:),
+                                UIControlEvents::ValueChanged,
+                            );
+                            sl.setTag(id.to_u64() as isize);
+                        }
+                        sl.into_super().into_super()
+                    }
                 };
                 self.views.insert(id.to_u64(), view);
             }
@@ -324,6 +385,27 @@ impl Backend for UiKitBackend {
                         let layer = view.layer();
                         let cg = unsafe { to_ui_color(color).CGColor() };
                         unsafe { layer.setBorderColor(Some(&cg)) };
+                    }
+                    Attribute::ImageSource(name) => {
+                        if let Ok(image_view) = view.clone().downcast::<UIImageView>() {
+                            let ns = NSString::from_str(&name);
+                            if let Some(img) = unsafe { UIImage::systemImageNamed(&ns) } {
+                                unsafe { image_view.setImage(Some(&img)) };
+                            }
+                        }
+                    }
+                    Attribute::BoolValue(on) => {
+                        if let Ok(sw) = view.clone().downcast::<UISwitch>() {
+                            unsafe { sw.setOn(on) };
+                        }
+                    }
+                    Attribute::FloatValue(value) => {
+                        if let Ok(sl) = view.clone().downcast::<UISlider>() {
+                            unsafe { sl.setValue(value) };
+                        }
+                    }
+                    Attribute::TintColor(color) => {
+                        unsafe { view.setTintColor(Some(&to_ui_color(color))) };
                     }
                     Attribute::Shadow(shadow) => {
                         let layer = view.layer();

@@ -85,3 +85,18 @@ fn wobbly_spring_overshoots_target() {
     assert!(max > 100.0, "a wobbly spring overshoots (peak {max})");
     scope.dispose();
 }
+
+#[test]
+fn decay_coasts_forward_and_stops() {
+    use super::decay;
+    let (p, scope) = create_root(|| decay(0.0, 1500.0, 0.998));
+    for _ in 0..600 {
+        tick(1.0 / 60.0);
+        if !is_animating() {
+            break;
+        }
+    }
+    assert!(!is_animating(), "decay stopped");
+    assert!(p.get() > 0.0, "coasted forward to {}", p.get());
+    scope.dispose();
+}

@@ -73,7 +73,7 @@ Flutter offer, plus Rust-only advantages. Columns: does the ecosystem support it
 | Capability | RN | Flutter | rax |
 |---|---|---|---|
 | Timing + easing animations | ✓ | ✓ | ✅ |
-| Spring / decay | ✓ | ✓ | 🟡 (spring ✅; decay pending) |
+| Spring / decay | ✓ | ✓ | ✅ |
 | Tap / long-press / double-tap | ✓ | ✓ | ✅ |
 | Gesture arena (pan/pinch/rotate) | ✓ | ✓ | ⬜ |
 | Gesture-driven animation | ✓ (Reanimated) | ✓ | ⬜ |

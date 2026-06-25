@@ -156,9 +156,32 @@ impl SpringAnim {
     }
 }
 
+struct Decay {
+    signal: Signal<f32>,
+    position: f32,
+    velocity: f32,
+    /// Per-millisecond velocity retention (e.g. `0.998`).
+    deceleration: f32,
+}
+
+impl Decay {
+    /// Integrates velocity decay by `dt` seconds; returns `true` once it stops.
+    fn advance(&mut self, dt: f32) -> bool {
+        let steps = (dt * 240.0).ceil().max(1.0);
+        let h = dt / steps;
+        for _ in 0..(steps as u32) {
+            self.position += self.velocity * h;
+            self.velocity *= self.deceleration.powf(h * 1000.0);
+        }
+        self.signal.set(self.position);
+        self.velocity.abs() < 1.0
+    }
+}
+
 enum Animation {
     Tween(Tween),
     Spring(SpringAnim),
+    Decay(Decay),
 }
 
 impl Animation {
@@ -166,6 +189,7 @@ impl Animation {
         match self {
             Animation::Tween(t) => t.advance(dt),
             Animation::Spring(s) => s.advance(dt),
+            Animation::Decay(d) => d.advance(dt),
         }
     }
 }
@@ -214,6 +238,33 @@ pub fn spring(from: f32, to: f32, spring: Spring) -> Signal<f32> {
             position: from,
             velocity: 0.0,
             spring,
+        }));
+    });
+    signal
+}
+
+/// Starts a decay (fling) animation from `from` with an initial `velocity`
+/// (units per second), coasting to a stop. `deceleration` is the per-millisecond
+/// velocity retention (`0.998` ≈ a normal scroll fling; smaller stops sooner).
+/// Returns a signal carrying the position.
+///
+/// ```
+/// use rax_anim::{decay, tick};
+/// use rax_reactive::create_root;
+///
+/// let (p, scope) = create_root(|| decay(0.0, 1200.0, 0.998));
+/// for _ in 0..600 { tick(1.0 / 60.0); }
+/// assert!(p.get() > 0.0); // coasted forward then stopped
+/// scope.dispose();
+/// ```
+pub fn decay(from: f32, velocity: f32, deceleration: f32) -> Signal<f32> {
+    let signal = rax_reactive::create_signal(from);
+    ACTIVE.with(|a| {
+        a.borrow_mut().push(Animation::Decay(Decay {
+            signal,
+            position: from,
+            velocity,
+            deceleration,
         }));
     });
     signal

@@ -7,7 +7,7 @@ scheduler's frame loop. ⬜ planned.
 - 🟡 animated values/signals driven on the frame loop
 - 🟡 timing animations (duration + easing curves: linear/ease/cubic-bezier/steps)
 - ✅ spring animations (mass/stiffness/damping; presets: default/stiff/wobbly)
-- ⬜ decay / fling
+- ✅ decay / fling (velocity-based coast to stop)
 - ⬜ keyframes / sequences / staggers
 - ⬜ parallel + sequential composition
 - ⬜ loop / repeat / reverse / yoyo

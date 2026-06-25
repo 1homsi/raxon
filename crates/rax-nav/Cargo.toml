@@ -14,6 +14,8 @@ unsafe_code = "forbid"
 [dependencies]
 rax-reactive = { path = "../rax-reactive" }
 rax-view = { path = "../rax-view" }
+rax-anim = { path = "../rax-anim" }
+rax-dom = { path = "../rax-dom" }
 
 [dev-dependencies]
 rax-dom = { path = "../rax-dom" }

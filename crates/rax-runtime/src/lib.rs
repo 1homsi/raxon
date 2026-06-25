@@ -632,6 +632,19 @@ impl App {
     }
 }
 
+/// Returns the `rax-runtime` package version string (e.g. `"0.1.0"`).
+///
+/// Useful for debug overlays or crash reports.
+///
+/// ```
+/// use rax_runtime::rax_version;
+///
+/// println!("rax {}", rax_version());
+/// ```
+pub fn rax_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
 impl Drop for App {
     fn drop(&mut self) {
         if let Some(scope) = self.scope.take() {

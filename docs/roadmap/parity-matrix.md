@@ -40,7 +40,7 @@ Flutter offer, plus Rust-only advantages. Columns: does the ecosystem support it
 | Tabs / BottomNav | community | ✓ | ✅ |
 | Drawer | community | ✓ | ✅ (composed) |
 | Divider / Spacer | ✓ | ✓ | ✅ |
-| Pull-to-refresh / swipe actions | ✓ | ✓ | ✅ pull-to-refresh; ⬜ swipe actions |
+| Pull-to-refresh / swipe actions | ✓ | ✓ | ✅ pull-to-refresh + swipe actions (`swipe_actions` — pan-driven reveal) |
 | WebView (escape hatch) | community | plugin | ✅ (`web_view(url)` / `web_view_html(html)` — WKWebView backed) |
 
 ## Styling & theming
@@ -55,7 +55,7 @@ Flutter offer, plus Rust-only advantages. Columns: does the ecosystem support it
 | Reactive paint (theme/anim-driven) | partial | ✓ | ✅ |
 | Variants + headless components | community | partial | ⬜ **(first-class)** |
 | Replace any widget app-wide | — | partial | ⬜ **(registry)** |
-| Per-platform look from one code | partial | ✓ | ⬜ |
+| Per-platform look from one code | partial | ✓ | ✅ (`rax::platform::{IS_IOS, PLATFORM}` + `platform_value(ios, android)`) |
 
 ## Navigation
 | Capability | RN | Flutter | rax |
@@ -67,7 +67,7 @@ Flutter offer, plus Rust-only advantages. Columns: does the ecosystem support it
 | Deep / universal links | ✓ | ✓ | ✅ (`on_deep_link` — openURL: bridged to `Event::DeepLink`) |
 | Shared-element transitions | community | ✓ (Hero) | ⬜ |
 | State restoration | ✓ | ✓ | ✅ (`save_ui_state` / `restore_ui_state`; session-scoped + KV store for cross-restart) |
-| Custom transitions | ✓ | ✓ | ⬜ |
+| Custom transitions | ✓ | ✓ | ✅ (`NavigationTransition::Slide/Fade/None` via `transition_routes`) |
 
 ## Animation & gestures
 | Capability | RN | Flutter | rax |
@@ -130,7 +130,7 @@ Flutter offer, plus Rust-only advantages. Columns: does the ecosystem support it
 |---|---|---|---|
 | CLI + project gen | ✓ | ✓ | ✅ (`rax new <name>` scaffolds Cargo.toml + src/lib.rs + .gitignore) |
 | Hot reload / fast refresh | ✓ | ✓ | ⬜ |
-| DevTools / inspector | ✓ | ✓ | ⬜ |
+| DevTools / inspector | ✓ | ✓ | ✅ (`dev_tools()` debug overlay + `rax_version()`; FPS/tree inspector ⬜) |
 | Error overlay | ✓ | ✓ | ✅ (`install_error_overlay()` panic hook + `error_overlay(signal)` composable) |
 | Testing framework | ✓ | ✓ | 🟡 |
 | OTA / code-push | ✓ (community) | partial | ⬜ |

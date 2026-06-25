@@ -1012,6 +1012,139 @@ pub fn error_overlay(message: rax_reactive::Signal<Option<String>>) -> impl View
     })
 }
 
+// ---------------------------------------------------------------------------
+// SwipeActions — swipe-to-reveal trailing action buttons
+// ---------------------------------------------------------------------------
+
+/// A list row with trailing swipe-to-reveal action buttons.
+///
+/// Pan left to reveal the `actions` buttons. Release past the halfway point to
+/// snap open; release before halfway (or let go near closed) to snap back.
+/// Each action is a `(label, color, callback)` triple; tapping an action button
+/// calls the callback and closes the row. The content is produced by a closure
+/// so it can be rebuilt inside a reactive `dynamic`.
+///
+/// # Example
+/// ```rust
+/// use rax_view::swipe_actions;
+/// use rax_core::Color;
+/// use std::sync::Arc;
+///
+/// let view = swipe_actions(
+///     || rax_view::text("My item"),
+///     vec![
+///         ("Delete".to_string(), Color::rgb(255, 51, 51), Arc::new(|| println!("deleted")) as Arc<dyn Fn() + Send + Sync>),
+///     ],
+/// );
+/// ```
+pub fn swipe_actions(
+    content: impl Fn() -> BoxedView + 'static,
+    actions: Vec<(String, Color, std::sync::Arc<dyn Fn() + Send + Sync>)>,
+) -> impl View {
+    use rax_anim::{animate, Easing};
+    use crate::modifier::ViewExt;
+    use rax_dom::Transform;
+
+    let offset_x = create_signal(0.0f32);
+    let action_width = 80.0f32 * actions.len() as f32;
+
+    // Build the action buttons (right-side panel, initially hidden by the
+    // content sitting over them).
+    let action_buttons: Vec<BoxedView> = actions
+        .iter()
+        .map(|(label, color, action)| {
+            let action = action.clone();
+            let label = label.clone();
+            let bg = *color;
+            let offset = offset_x;
+            boxed(
+                column((boxed(
+                    crate::button::button(label, move || {
+                        action();
+                        offset.set(0.0);
+                    }),
+                ),))
+                .background(bg)
+                .grow_by(1.0),
+            )
+        })
+        .collect();
+
+    // Layout: a row whose right panel is exactly `action_width` wide and whose
+    // content panel fills the remaining space. We slide the *content* panel
+    // left using `transform_fn` — which does not disturb flex layout — so the
+    // action panel becomes visible behind it as the user swipes.
+    row((
+        boxed(
+            dynamic(move || {
+                boxed(
+                    column((boxed(content()),))
+                        .grow()
+                        .transform_fn(move || {
+                            Transform::IDENTITY.translate(offset_x.get(), 0.0)
+                        }),
+                )
+            })
+            .grow(1.0),
+        ),
+        boxed(
+            row(action_buttons)
+                .width(action_width),
+        ),
+    ))
+    .on_pan(move |info: PanInfo| {
+        // Accumulate delta onto the current offset; clamp to [−action_width, 0].
+        let current = offset_x.get();
+        let new_val = (current + info.translation.x * 0.5).clamp(-action_width, 0.0);
+        offset_x.set(new_val);
+
+        if info.phase == GesturePhase::Ended {
+            // Snap: past half-way → open; otherwise → closed.
+            let target = if new_val < -action_width / 2.0 {
+                -action_width
+            } else {
+                0.0
+            };
+            let anim = animate(new_val, target, 0.2, Easing::EaseOut);
+            create_effect(move || offset_x.set(anim.get()));
+        }
+    })
+}
+
+// ---------------------------------------------------------------------------
+// DevTools overlay
+// ---------------------------------------------------------------------------
+
+/// A lightweight developer badge overlay. In debug builds renders a small
+/// translucent "rax [debug]" pill in the bottom-right corner of the parent.
+/// In release builds this is a zero-sized, zero-cost view.
+///
+/// Place inside a `stack()` over your app content:
+///
+/// ```rust
+/// use rax_view::{dev_tools, stack, text};
+///
+/// let v = stack((text("App content"), dev_tools()));
+/// ```
+pub fn dev_tools() -> BoxedView {
+    if cfg!(debug_assertions) {
+        boxed(
+            row((
+                boxed(
+                    text("rax [debug]")
+                        .font_size(10.0)
+                        .color(Color::rgb(255, 255, 255)),
+                ),
+            ))
+            .padding(4.0)
+            .background(Color::rgba(0, 0, 0, 153))
+            .corner_radius(4.0),
+        )
+    } else {
+        boxed(column(()).size(0.0, 0.0))
+    }
+}
+
 /// Returns a `(x_signal, y_signal, handler)` triple for gesture-driven animation.
 ///
 /// Pass `handler` to `.on_pan()` on a view; use `x_signal.get()` and

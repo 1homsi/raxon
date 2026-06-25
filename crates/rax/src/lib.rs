@@ -62,6 +62,9 @@ pub use rax_style as style;
 /// Plugin system for registering native modules with the rax runtime.
 pub use rax_plugin as plugin;
 
+/// Compile-time platform detection helpers.
+pub mod platform;
+
 /// Secure key-value storage (iOS Keychain on device, in-memory elsewhere).
 pub use rax_keychain as keychain;
 
@@ -111,11 +114,17 @@ pub mod prelude {
     // Async resource state (needed to match on Loading/Ready/Failed).
     pub use rax_async::ResourceState;
     pub use rax_intl::{t, t_args, t_plural};
-    pub use rax_nav::{create_navigator, routes, use_navigator, Navigator};
+    pub use rax_nav::{
+        create_navigator, routes, transition_routes, use_navigator, NavigationTransition,
+        Navigator,
+    };
     pub use rax_store::{persisted, store_get, store_set};
     pub use rax_style::{theme, use_theme, Theme};
     pub use rax_plugin::{dispatch_plugin_event, register_plugin, Plugin};
     pub use rax_keychain::{delete_secret, get_secret, set_secret};
+
+    // Platform detection helpers.
+    pub use crate::platform::platform_value;
 
     // The iOS launcher, so `run(app)` is in scope on device/simulator.
     #[cfg(target_os = "ios")]

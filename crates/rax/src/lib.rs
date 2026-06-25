@@ -89,7 +89,7 @@ pub mod prelude {
 
     // High-frequency helpers from the satellite crates. Full surfaces live in
     // the namespaced modules (`rax::nav`, `rax::store`, …).
-    pub use rax_anim::{animate, Easing};
+    pub use rax_anim::{animate, spring, Easing, Spring};
     pub use rax_async::{create_resource, Resource};
     pub use rax_intl::{t, t_args};
     pub use rax_nav::{create_navigator, routes, use_navigator, Navigator};

@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use rax_reactive::{create_effect, create_root};
 
-use super::{animate, is_animating, tick, Easing};
+use super::{animate, is_animating, spring, tick, Easing, Spring};
 
 #[test]
 fn linear_animation_interpolates_and_finishes() {
@@ -52,5 +52,36 @@ fn zero_duration_jumps_to_end() {
     let (a, scope) = create_root(|| animate(5.0, 9.0, 0.0, Easing::Linear));
     tick(0.016);
     assert_eq!(a.get(), 9.0);
+    scope.dispose();
+}
+
+#[test]
+fn spring_settles_at_target_and_clears() {
+    let (s, scope) = create_root(|| spring(0.0, 100.0, Spring::default()));
+    assert_eq!(s.get(), 0.0);
+    // Run for a few simulated seconds at 60fps.
+    for _ in 0..600 {
+        tick(1.0 / 60.0);
+        if !is_animating() {
+            break;
+        }
+    }
+    assert!(!is_animating(), "spring finished");
+    assert!((s.get() - 100.0).abs() < 0.1, "settled at target: {}", s.get());
+    scope.dispose();
+}
+
+#[test]
+fn wobbly_spring_overshoots_target() {
+    let (s, scope) = create_root(|| spring(0.0, 100.0, Spring::WOBBLY));
+    let mut max = 0.0_f32;
+    for _ in 0..600 {
+        tick(1.0 / 60.0);
+        max = max.max(s.get());
+        if !is_animating() {
+            break;
+        }
+    }
+    assert!(max > 100.0, "a wobbly spring overshoots (peak {max})");
     scope.dispose();
 }

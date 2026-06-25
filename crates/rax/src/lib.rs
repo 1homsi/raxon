@@ -95,7 +95,7 @@ pub mod prelude {
     pub use rax_anim::{animate, decay, delayed, oscillate, parallel, sequence, spring, stagger, Easing, Spring};
     pub use rax_async::{create_resource, Resource};
     // HTTP client helpers — `get`/`post` return a `Resource<Response>`.
-    pub use rax_net::{get, post, send, Method, Request, Response};
+    pub use rax_net::{connect_ws, get, post, send, Method, Request, Response, WsHandle, WsMessage};
     // Async resource state (needed to match on Loading/Ready/Failed).
     pub use rax_async::ResourceState;
     pub use rax_intl::{t, t_args, t_plural};

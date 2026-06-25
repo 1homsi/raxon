@@ -24,7 +24,7 @@ Match RN `FlatList`/`SectionList`/`VirtualizedList` and Flutter
 - ⬜ `SectionList` (sticky section headers/footers)
 - ⬜ variable / dynamic item heights, measured & cached
 - ⬜ horizontal + grid virtualization (`LazyGrid`)
-- ⬜ separators / `ItemSeparator`
+- ✅ separators (`item_separator(color, inset)` — 1pt horizontal rule with leading inset)
 - ⬜ header / footer / empty-state components
 - ⬜ initialScrollIndex, maintainVisibleContentPosition
 - ⬜ estimated item size hints

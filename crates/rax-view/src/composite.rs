@@ -549,6 +549,47 @@ pub fn modal<V: View + 'static>(
 }
 
 // ---------------------------------------------------------------------------
+// Fade transition — animated opacity wrapper
+// ---------------------------------------------------------------------------
+
+/// Wraps `content` (produced by a closure) in a fade that animates opacity
+/// between `0.0` (hidden) and `1.0` (visible) as `show` changes.
+///
+/// The view **occupies space even when invisible** — use [`dynamic`] / [`show`]
+/// if you want to unmount the content when it hides.
+///
+/// # Example
+/// ```rust
+/// use rax_view::{fade_transition, text};
+/// use rax_reactive::create_signal;
+///
+/// let visible = create_signal(true);
+/// let v = fade_transition(visible, || text("Hello, world!"));
+/// ```
+pub fn fade_transition<V: View + 'static>(
+    show: Signal<bool>,
+    content: impl Fn() -> V + 'static,
+) -> impl View {
+    use rax_anim::{animate, Easing};
+
+    // Start at the correct opacity for the current state.
+    let initial = if show.get() { 1.0f32 } else { 0.0f32 };
+    let opacity = create_signal(initial);
+
+    // When `show` flips, kick off a new 300 ms tween and relay its value
+    // into `opacity` on every tick (via a nested effect).
+    create_effect(move || {
+        let target = if show.get() { 1.0f32 } else { 0.0f32 };
+        let anim_sig = animate(opacity.get(), target, 0.3, Easing::EaseInOut);
+        create_effect(move || opacity.set(anim_sig.get()));
+    });
+
+    dynamic(move || {
+        boxed(column((boxed(content()),)).opacity(opacity.get()))
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Bottom sheet — slide-up panel
 // ---------------------------------------------------------------------------
 
@@ -620,6 +661,29 @@ pub fn toast(message: Signal<Option<String>>) -> impl View {
 }
 
 // ---------------------------------------------------------------------------
+// Item separator — horizontal rule for list items
+// ---------------------------------------------------------------------------
+
+/// A horizontal separator suitable for use between list items.
+///
+/// `inset` adds left padding so the line starts at the same x-position as
+/// list content — matching the default iOS separator inset.
+///
+/// # Example
+/// ```rust
+/// use rax_view::item_separator;
+/// use rax_core::Color;
+///
+/// let sep = item_separator(Color::rgba(0, 0, 0, 51), 16.0);
+/// ```
+pub fn item_separator(color: Color, inset: f32) -> impl View {
+    row((
+        boxed(column(()).size(inset, 1.0)),
+        boxed(column(()).background(color).height(1.0).grow(1.0)),
+    ))
+}
+
+// ---------------------------------------------------------------------------
 // Picker
 // ---------------------------------------------------------------------------
 
@@ -663,6 +727,40 @@ pub fn picker(
         })
         .collect();
     column(rows).corner_radius(10.0).background(Color::WHITE)
+}
+
+// ---------------------------------------------------------------------------
+// Grid layout
+// ---------------------------------------------------------------------------
+
+/// Arranges `items` in a `columns`-wide grid with uniform `gap` spacing.
+///
+/// Items fill left-to-right; a new row is started every `columns` items.
+/// An incomplete final row is left-aligned (not stretched).
+///
+/// # Example
+/// ```rust
+/// use rax_view::{grid, text, boxed};
+///
+/// let cells: Vec<_> = (0..9).map(|i| boxed(text(format!("Cell {i}")))).collect();
+/// let view = grid(3, 8.0, cells);
+/// ```
+pub fn grid(columns: usize, gap: f32, items: Vec<BoxedView>) -> impl View {
+    let mut rows: Vec<BoxedView> = Vec::new();
+    let mut current_row: Vec<BoxedView> = Vec::new();
+
+    for item in items {
+        current_row.push(item);
+        if current_row.len() == columns {
+            let row_items = std::mem::take(&mut current_row);
+            rows.push(boxed(row(row_items).gap(gap)));
+        }
+    }
+    if !current_row.is_empty() {
+        rows.push(boxed(row(current_row).gap(gap)));
+    }
+
+    column(rows).gap(gap)
 }
 
 // ---------------------------------------------------------------------------

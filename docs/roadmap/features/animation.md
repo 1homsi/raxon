@@ -16,7 +16,7 @@ scheduler's frame loop. ⬜ planned.
 
 ## Declarative transitions
 - ⬜ implicit transitions (`animate`/`with_transition` on property change)
-- ⬜ enter/exit (mount/unmount) animations
+- ✅ fade enter/exit (`fade_transition(show, content)` — opacity tween on signal change); ⬜ slide/scale/mount unmount
 - ⬜ layout animations (auto-animate position/size changes)
 - ⬜ list item add/remove/reorder animations
 - ⬜ shared-element / hero transitions

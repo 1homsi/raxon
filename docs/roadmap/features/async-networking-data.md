@@ -15,7 +15,7 @@ Match `fetch`/axios/react-query (RN) and `http`/`dio`/`riverpod` (Flutter). ⬜.
 - ⬜ TLS, cert pinning, cookies, redirects, timeouts, retries/backoff
 - ⬜ multipart upload, streaming download, progress
 - ⬜ JSON (serde) + form/urlencoded; typed request/response
-- ⬜ WebSocket client, Server-Sent Events
+- ✅ WebSocket client (`connect_ws(url, on_message)` — tungstenite, background thread, send/receive); ⬜ SSE
 - ⬜ GraphQL helper (queries/mutations/subscriptions)
 - ⬜ gRPC (optional)
 - ⬜ connectivity awareness, offline detection, request queueing

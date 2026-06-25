@@ -14,7 +14,7 @@ styleable, with a headless core, and replaceable via the theme registry
 - ✅ `Dynamic` (reactive subtree)
 - ✅ `Stack` / `ZStack` (overlapping, z-ordered children)
 - ⬜ `Wrap` (flow layout)
-- ⬜ `Grid` / `LazyGrid`
+- ✅ `Grid` (`grid(columns, gap, items)` — composed); ⬜ `LazyGrid` (virtualized)
 - ⬜ `Expanded` / `Flexible` helpers
 - ⬜ `AspectRatio`, `Center`, `Align`, `Positioned` (absolute)
 - ⬜ `SafeArea`

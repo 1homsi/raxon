@@ -23,7 +23,7 @@ Flutter offer, plus Rust-only advantages. Columns: does the ecosystem support it
 |---|---|---|---|
 | View / Text / Button | ✓ | ✓ | ✅ |
 | Flexbox layout | ✓ (Yoga) | ✓ | ✅ |
-| Grid layout | community | ✓ | ⬜ |
+| Grid layout | community | ✓ | ✅ (`grid(columns, gap, items)` — composed row/column bucketing) |
 | Image (cache/resize/placeholder) | ✓ | ✓ | ✅ (source+tint+ImageData+`network_image`; cache/resize modes later) |
 | Icon (vector / SF Symbols) | community | ✓ | ✅ |
 | ScrollView | ✓ | ✓ | ✅ |
@@ -96,7 +96,7 @@ Flutter offer, plus Rust-only advantages. Columns: does the ecosystem support it
 | Capability | RN | Flutter | rax |
 |---|---|---|---|
 | HTTP / fetch | ✓ | ✓ | ✅ (ureq-backed `HttpClient`) |
-| WebSocket / SSE / GraphQL | community | community | ⬜ |
+| WebSocket / SSE / GraphQL | community | community | 🟡 WebSocket ✅ (`connect_ws` — tungstenite-backed); SSE/GraphQL ⬜ |
 | Resource (async data + loading state) | community | community | ✅ |
 | Query cache (react-query-like) | community | community | ⬜ |
 | KV storage (+ persisted signals) | community | ✓ | ✅ |

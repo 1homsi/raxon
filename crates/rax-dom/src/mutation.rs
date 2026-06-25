@@ -56,6 +56,26 @@ pub enum WidgetKind {
     Scroll,
 }
 
+/// Accessibility role, mapped to platform a11y traits (VoiceOver/TalkBack).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Role {
+    /// No special role.
+    #[default]
+    None,
+    /// Activatable button.
+    Button,
+    /// Section header.
+    Header,
+    /// Image/graphic.
+    Image,
+    /// Link.
+    Link,
+    /// Adjustable (slider-like).
+    Adjustable,
+    /// Search field.
+    Search,
+}
+
 /// A gesture a widget should recognize (the backend attaches a recognizer).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GestureKind {
@@ -103,6 +123,10 @@ pub enum Attribute {
     TintColor(Color),
     /// Placeholder text (e.g. for a text field).
     Placeholder(String),
+    /// Accessibility label read by screen readers.
+    AccessibilityLabel(String),
+    /// Accessibility role / traits.
+    AccessibilityRole(Role),
 }
 
 /// A drop shadow specification.

@@ -502,6 +502,29 @@ impl Backend for UiKitBackend {
                     Attribute::TintColor(color) => {
                         unsafe { view.setTintColor(Some(&to_ui_color(color))) };
                     }
+                    Attribute::AccessibilityLabel(label) => {
+                        let ns = NSString::from_str(&label);
+                        unsafe {
+                            let _: () = msg_send![&*view, setIsAccessibilityElement: true];
+                            let _: () = msg_send![&*view, setAccessibilityLabel: &*ns];
+                        }
+                    }
+                    Attribute::AccessibilityRole(role) => {
+                        // UIAccessibilityTraits bits (UIAccessibilityConstants.h).
+                        let traits: i64 = match role {
+                            rax_dom::Role::None => 0,
+                            rax_dom::Role::Button => 1 << 0,
+                            rax_dom::Role::Link => 1 << 1,
+                            rax_dom::Role::Image => 1 << 2,
+                            rax_dom::Role::Search => 1 << 10,
+                            rax_dom::Role::Adjustable => 1 << 12,
+                            rax_dom::Role::Header => 1 << 15,
+                        };
+                        unsafe {
+                            let _: () = msg_send![&*view, setIsAccessibilityElement: true];
+                            let _: () = msg_send![&*view, setAccessibilityTraits: traits];
+                        }
+                    }
                     Attribute::Shadow(shadow) => {
                         let layer = view.layer();
                         let cg = unsafe { to_ui_color(shadow.color).CGColor() };

@@ -4,7 +4,7 @@
 //! customizability mechanism: layout control on *every* view, not just containers.
 
 use rax_core::{AlignItems, Color, Dimension, EdgeInsets, LayoutStyle, Position};
-use rax_dom::{Attribute, EventKind, GestureKind, Shadow, Tree, WidgetId};
+use rax_dom::{Attribute, EventKind, GestureKind, Role, Shadow, Tree, WidgetId};
 
 use crate::view::View;
 
@@ -235,6 +235,22 @@ pub trait ViewExt: View + Sized {
             t.on(id, EventKind::LongPress, move |_| f());
             t.enable_gesture(id, GestureKind::LongPress);
         })
+    }
+
+    // --- accessibility ---
+
+    /// Sets the screen-reader label for this view.
+    fn accessibility_label(
+        self,
+        label: impl Into<String>,
+    ) -> Decorated<Self, impl FnOnce(&mut Tree, WidgetId)> {
+        let label = label.into();
+        self.decorate(move |t, id| t.set(id, Attribute::AccessibilityLabel(label)))
+    }
+
+    /// Sets the accessibility role (mapped to platform traits).
+    fn role(self, role: Role) -> Decorated<Self, impl FnOnce(&mut Tree, WidgetId)> {
+        self.decorate(move |t, id| t.set(id, Attribute::AccessibilityRole(role)))
     }
 }
 

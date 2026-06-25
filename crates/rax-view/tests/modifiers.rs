@@ -78,3 +78,17 @@ fn modifiers_chain_and_accumulate() {
         attr: Attribute::CornerRadius(6.0)
     }));
 }
+
+#[test]
+fn accessibility_label_and_role_emit_attributes() {
+    use rax_view::Role;
+    let (_tree, log, id) = build(
+        text("Save")
+            .accessibility_label("Save document")
+            .role(Role::Button),
+    );
+    let muts = log.borrow();
+    let has = |a: Attribute| muts.contains(&Mutation::SetAttribute { id, attr: a });
+    assert!(has(Attribute::AccessibilityLabel("Save document".into())));
+    assert!(has(Attribute::AccessibilityRole(rax_dom::Role::Button)));
+}

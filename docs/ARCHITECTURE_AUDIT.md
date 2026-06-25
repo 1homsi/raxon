@@ -10,14 +10,27 @@ Date: 2026-06-25 · Reviewed commit state: `rax-core`, `rax-reactive`, `rax-dom`
 
 ## 0. Status snapshot — what exists vs. what we claim
 
-| Layer | Spec'd | Built | Tested | Verdict |
-|---|---|---|---|---|
-| Core data structures (`rax-core`) | ✅ | ✅ geometry, arena, color | ✅ 17 | Solid foundation |
-| Reactive runtime (`rax-reactive`) | ✅ | ✅ signal/memo/effect, batch, untrack | ✅ 13 | **Correct but architecturally mis-scoped — see R1** |
-| Element tree + render seam (`rax-dom`) | partial | ✅ Tree, Mutation, Backend, Host | ✅ 7 | Right idea, **wrong control flow — see R2** |
-| Everything else (35 subsystems) | ✅ on paper | ❌ | — | Greenfield |
+> **Vertical slice achieved (2026-06-25):** the counter demo runs on the iOS
+> Simulator — native `UILabel`/`UIButton` laid out by the flexbox engine, driven
+> entirely by Rust, with a tap→signal→one-mutation reactive loop. iOS came before
+> Android only because the dev machine has Xcode but no Android SDK; the backend
+> seam is identical for both.
 
-We have ~3 of ~38 subsystems. That is *fine* — but it means **now is exactly the moment** to lock the load-bearing decisions, because every later subsystem will encode assumptions about the three crates above. The cost of changing them rises super-linearly from here.
+| Layer | Built | Tested | Verdict |
+|---|---|---|---|
+| `rax-core` — geometry, arena, color, layout style | ✅ | ✅ | Solid leaf |
+| `rax-reactive` — signals/memos/effects + Runtime + ownership (R1) | ✅ | ✅ | Glitch-free, isolatable |
+| `rax-scheduler` — frame phases, tasks, marshaling (R2) | ✅ | ✅ | Built; runtime hot-path still uses direct ticks |
+| `rax-dom` — element tree, mutation + event seam (R3) | ✅ | ✅ | Bidirectional |
+| `rax-layout` — taffy flexbox → frames | ✅ | ✅ | Leaf text-measure is a heuristic (see M1 debt) |
+| `rax-view` — macro-free builder (R4) | ✅ | ✅ | Dynamic lists/conditionals still TODO |
+| `rax-runtime` — App: mount + layout + events + frames | ✅ | ✅ | Drives ticks directly (scheduler wiring pending) |
+| `rax-ios` — UIKit backend via objc2 (pure Rust) | ✅ | runs on sim | Bootstrap uses deprecated UIScreen/window (M3 debt) |
+| 30+ subsystems (text/IME, nav, animation, a11y, async, CLI, …) | ❌ | — | Greenfield |
+
+~66 host tests, clippy-clean. The load-bearing decisions (R1–R3) are locked; the
+public surfaces (View, Style, Backend/Event, Mutation) are stable enough to build
+on. Known debt is tracked in the milestone notes.
 
 ---
 

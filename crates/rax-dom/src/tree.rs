@@ -69,10 +69,13 @@ impl Tree {
         self.root
     }
 
-    /// Marks `id` as the tree root. (Backends treat the root specially: it is
-    /// attached to the platform's content view rather than to a parent widget.)
+    /// Marks `id` as the tree root and tells the backend to attach it to the
+    /// platform's content view.
     pub fn set_root(&mut self, id: WidgetId) {
         self.root = Some(id);
+        if self.nodes.get(id.0).is_some() {
+            self.host.emit(Mutation::SetRoot { id });
+        }
     }
 
     /// Creates a layout container view.

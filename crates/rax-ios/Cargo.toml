@@ -1,0 +1,46 @@
+[package]
+name = "rax-ios"
+description = "iOS (UIKit) backend for rax, implemented in pure Rust via objc2."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints.rust]
+missing_docs = "warn"
+# objc2 interop requires unsafe; allow it in this crate only.
+
+[dependencies]
+rax-core = { path = "../rax-core" }
+rax-dom = { path = "../rax-dom" }
+rax-runtime = { path = "../rax-runtime" }
+rax-view = { path = "../rax-view" }
+
+# UIKit is only present on Apple mobile targets; gate the bindings so the rest
+# of the workspace still builds on the host.
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = [
+    "NSString",
+    "NSObject",
+    "NSNotification",
+    "NSThread",
+    "NSRunLoop",
+] }
+objc2-ui-kit = { version = "0.3", features = [
+    "UIResponder",
+    "UIView",
+    "UILabel",
+    "UIButton",
+    "UIControl",
+    "UIColor",
+    "UIFont",
+    "UIScreen",
+    "UIWindow",
+    "UIViewController",
+    "UIApplication",
+    "UIGeometry",
+] }
+objc2-quartz-core = { version = "0.3", features = ["CADisplayLink"] }
+objc2-core-foundation = { version = "0.3", features = ["CFCGTypes"] }

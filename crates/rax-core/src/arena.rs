@@ -42,6 +42,13 @@ impl Index {
     pub fn generation(self) -> u32 {
         self.generation
     }
+
+    /// Reconstructs an index from its raw parts. Intended for round-tripping a
+    /// handle through an opaque integer (e.g. a native view's `tag`); the result
+    /// is only valid if the parts came from a live [`Index`].
+    pub const fn from_raw(slot: u32, generation: u32) -> Index {
+        Index { slot, generation }
+    }
 }
 
 /// What a slot currently holds.

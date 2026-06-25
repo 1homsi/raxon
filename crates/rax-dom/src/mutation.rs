@@ -19,6 +19,18 @@ impl WidgetId {
     pub fn raw(self) -> u32 {
         self.0.slot()
     }
+
+    /// Packs this id into a `u64` (slot in the high 32 bits, generation in the
+    /// low 32). Used to stash a widget id in an opaque native field such as a
+    /// `UIView.tag`, and recover it on a callback.
+    pub fn to_u64(self) -> u64 {
+        ((self.0.slot() as u64) << 32) | (self.0.generation() as u64)
+    }
+
+    /// Inverse of [`to_u64`](WidgetId::to_u64).
+    pub fn from_u64(bits: u64) -> WidgetId {
+        WidgetId(Index::from_raw((bits >> 32) as u32, bits as u32))
+    }
 }
 
 /// The kind of native view to materialize. Intentionally tiny for now; new kinds
@@ -96,6 +108,12 @@ pub enum Mutation {
     /// Free the native view backing `id`.
     Destroy {
         /// Widget to destroy.
+        id: WidgetId,
+    },
+    /// Designate `id` as the root view, to be attached to the platform's content
+    /// view (window / view-controller view).
+    SetRoot {
+        /// The root widget.
         id: WidgetId,
     },
 }

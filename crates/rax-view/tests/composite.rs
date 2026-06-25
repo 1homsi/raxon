@@ -81,3 +81,28 @@ fn card_groups_children_and_badge_shows_label() {
     assert!(has_text("Title") && has_text("Body"), "card rendered children");
     assert!(has_text("9+"), "badge rendered its label");
 }
+
+#[test]
+fn avatar_is_circular_and_chip_toggles() {
+    use rax_view::{avatar, chip, View};
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let (mut tree, log) = harness();
+    avatar("person.crop.circle.fill").size(48.0).build(&mut tree);
+
+    // Circular = corner radius is half the size.
+    assert!(
+        log.borrow().iter().any(|m| matches!(
+            m,
+            Mutation::SetAttribute { attr: Attribute::CornerRadius(r), .. } if (*r - 24.0).abs() < 1e-3
+        )),
+        "avatar rounds to a circle"
+    );
+
+    let tapped = Rc::new(Cell::new(0));
+    let t2 = tapped.clone();
+    let id = chip("Spicy", true, move || t2.set(t2.get() + 1)).build(&mut tree);
+    tree.dispatch(&Event::Tap { target: id });
+    assert_eq!(tapped.get(), 1, "chip reports taps");
+}

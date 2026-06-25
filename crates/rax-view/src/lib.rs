@@ -50,7 +50,9 @@ mod text_input;
 mod view;
 
 pub use button::{button, Button};
-pub use composite::{badge, card, checkbox, radio, Badge, Card, Checkbox, Radio};
+pub use composite::{
+    avatar, badge, card, checkbox, chip, radio, Avatar, Badge, Card, Checkbox, Chip, Radio,
+};
 pub use container::{column, row, Container};
 pub use controls::{segmented, slider, stepper, switch, Segmented, Slider, Stepper, Switch};
 pub use dynamic::{dynamic, Dynamic};

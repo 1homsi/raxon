@@ -16,7 +16,7 @@ use rax_dom::{Tree, WidgetId};
 
 use crate::container::{column, row};
 use crate::dynamic::dynamic;
-use crate::image::icon;
+use crate::image::{icon, image};
 use crate::modifier::ViewExt;
 use crate::text::text;
 use crate::view::{boxed, BoxedView, View, ViewSequence};
@@ -318,6 +318,109 @@ impl View for Badge {
             .align(AlignItems::Center)
             .background(self.background)
             .corner_radius(10.0)
+            .build(tree)
+    }
+}
+
+/// A circular image, typically a profile picture. Build via [`avatar`].
+pub struct Avatar {
+    source: String,
+    size: f32,
+}
+
+/// Creates a circular avatar from an asset/symbol `source`.
+///
+/// ```
+/// use rax_view::avatar;
+///
+/// let pic = avatar("person.crop.circle.fill").size(48.0);
+/// ```
+pub fn avatar(source: impl Into<String>) -> Avatar {
+    Avatar {
+        source: source.into(),
+        size: 40.0,
+    }
+}
+
+impl Avatar {
+    /// Sets the diameter in points (default `40`).
+    #[must_use]
+    pub fn size(mut self, size: f32) -> Self {
+        self.size = size;
+        self
+    }
+}
+
+impl View for Avatar {
+    fn build(self, tree: &mut Tree) -> WidgetId {
+        // A square image clipped to a full corner radius is a circle.
+        image(self.source)
+            .size(self.size, self.size)
+            .corner_radius(self.size / 2.0)
+            .build(tree)
+    }
+}
+
+/// A compact, tappable, selectable pill — filter chips, tags, choices. Build
+/// via [`chip`].
+pub struct Chip<F> {
+    label: String,
+    selected: bool,
+    accent: Color,
+    on_tap: F,
+}
+
+/// Creates a chip showing `label`, filled when `selected`, calling `on_tap`
+/// when pressed.
+///
+/// ```
+/// use rax_view::chip;
+/// use rax_reactive::create_signal;
+///
+/// let on = create_signal(false);
+/// let view = chip("Spicy", on.get(), move || on.update(|v| *v = !*v));
+/// ```
+pub fn chip<F: FnMut() + 'static>(
+    label: impl Into<String>,
+    selected: bool,
+    on_tap: F,
+) -> Chip<F> {
+    Chip {
+        label: label.into(),
+        selected,
+        accent: DEFAULT_TINT,
+        on_tap,
+    }
+}
+
+impl<F> Chip<F> {
+    /// Overrides the accent color (fill when selected, outline otherwise).
+    #[must_use]
+    pub fn accent(mut self, color: Color) -> Self {
+        self.accent = color;
+        self
+    }
+}
+
+impl<F: FnMut() + 'static> View for Chip<F> {
+    fn build(self, tree: &mut Tree) -> WidgetId {
+        let (bg, fg) = if self.selected {
+            (self.accent, Color::rgb(255, 255, 255))
+        } else {
+            (Color::TRANSPARENT, self.accent)
+        };
+        row((text(self.label).font_size(14.0).color(fg),))
+            .padding_insets(EdgeInsets {
+                top: 6.0,
+                right: 14.0,
+                bottom: 6.0,
+                left: 14.0,
+            })
+            .align(AlignItems::Center)
+            .background(bg)
+            .corner_radius(16.0)
+            .border(1.0, self.accent)
+            .on_tap(self.on_tap)
             .build(tree)
     }
 }

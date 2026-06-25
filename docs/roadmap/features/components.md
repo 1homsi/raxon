@@ -26,11 +26,11 @@ styleable, with a headless core, and replaceable via the theme registry
 - ⬜ Rich text / spans (inline styles, links, inline images)
 - ✅ `Icon` (vector icon set + custom)
 - 🟡 `Image` (source + tint; network/placeholder/fade-in/resize modes later)
-- ⬜ `Avatar`
+- ✅ `Avatar` (composed from public API)
 - ✅ `Badge` (composed from public API)
 - ✅ `Divider` / `Separator`
 - ✅ `Card` primitive (composed from public API)
-- ⬜ `Chip` / `Tag`
+- ✅ `Chip` / `Tag` (composed from public API)
 - ⬜ `Tooltip`
 - ⬜ `Skeleton` / shimmer placeholder
 

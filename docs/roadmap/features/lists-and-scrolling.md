@@ -4,7 +4,7 @@ Match RN `FlatList`/`SectionList`/`VirtualizedList` and Flutter
 `ListView`/`CustomScrollView`/slivers. Performance-critical. ✅ · 🟡 · ⬜.
 
 ## Scrolling
-- 🟡 `ScrollView` (vertical, basic)
+- ✅ `ScrollView` (vertical, basic)
 - ⬜ horizontal scroll, bidirectional
 - ⬜ momentum / deceleration matching platform physics
 - ⬜ overscroll / bounce (iOS) / stretch (Android)
@@ -20,7 +20,7 @@ Match RN `FlatList`/`SectionList`/`VirtualizedList` and Flutter
 ## Virtualized lists (recycling)
 - ⬜ `LazyColumn`/`LazyRow` (windowed rendering)
 - ⬜ view **recycling / pooling** (bounded memory for huge lists)
-- ⬜ `List` with keyed items + minimal reconciliation
+- 🟡 `List` with keyed items + minimal reconciliation
 - ⬜ `SectionList` (sticky section headers/footers)
 - ⬜ variable / dynamic item heights, measured & cached
 - ⬜ horizontal + grid virtualization (`LazyGrid`)

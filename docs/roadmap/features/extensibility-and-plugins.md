@@ -22,7 +22,7 @@ How the world extends `rax` without forking it — the mechanism behind
 - ⬜ custom rendering via the GPU path (`rax-vello`)
 - ⬜ component registry: replace any built-in widget app-wide
 - ⬜ pluggable transitions, navigators, easing curves
-- ⬜ custom `Backend` implementations (target new platforms yourself)
+- 🟡 custom `Backend` implementations (target new platforms yourself)
 
 ## Framework extension points
 - ⬜ middleware/interceptors for state, navigation, network

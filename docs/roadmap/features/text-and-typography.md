@@ -8,7 +8,7 @@ Native-quality text. Goal: match Flutter's `RichText`/`TextSpan` power and RN's
 - ✅ font size, color
 - 🟡 font family, weight, style (italic)
 - ⬜ line height, letter spacing, word spacing
-- ⬜ text alignment (start/center/end/justify)
+- 🟡 text alignment (start/center/end/justify)
 - ⬜ truncation / ellipsis (head/middle/tail), max lines
 - ⬜ text wrapping / break strategies
 - ⬜ text decoration (underline/strikethrough/overline, color/style)

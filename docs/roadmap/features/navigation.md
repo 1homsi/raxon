@@ -4,15 +4,15 @@ Match React Navigation / Expo Router and Flutter Navigator 2.0 / go_router.
 Rust-owned navigation state with native transition primitives. ⬜ planned.
 
 ## Navigators
-- ⬜ stack navigator (push/pop/replace/popToTop/popToRoot)
-- ⬜ tab navigator (bottom tabs + top tabs)
+- ✅ stack navigator (push/pop/replace/popToTop/popToRoot)
+- ✅ tab navigator (bottom tabs + top tabs)
 - ⬜ modal / sheet presentation (full / page-sheet / form-sheet / sizes)
 - ⬜ drawer / side-menu navigator
 - ⬜ nested navigators (tabs containing stacks, etc.)
 - ⬜ split-view / master-detail (tablet/desktop adaptive)
 
 ## Routing
-- ⬜ typed routes (compile-checked params)
+- ✅ typed routes (compile-checked params)
 - ⬜ declarative URL routing (path patterns, params, query)
 - ⬜ deep links + universal/app links
 - ⬜ web-history integration (for the web target)

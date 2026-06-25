@@ -22,16 +22,21 @@ Flutter offer, plus Rust-only advantages. Columns: does the ecosystem support it
 | Capability | RN | Flutter | rax |
 |---|---|---|---|
 | View / Text / Button | ✓ | ✓ | ✅ |
-| Flexbox layout | ✓ (Yoga) | ✓ | 🟡 |
+| Flexbox layout | ✓ (Yoga) | ✓ | ✅ |
 | Grid layout | community | ✓ | ⬜ |
-| Image (cache/resize/placeholder) | ✓ | ✓ | ⬜ |
-| ScrollView | ✓ | ✓ | 🟡 |
+| Image (cache/resize/placeholder) | ✓ | ✓ | 🟡 (source+tint; cache later) |
+| Icon (vector / SF Symbols) | community | ✓ | ✅ |
+| ScrollView | ✓ | ✓ | ✅ |
 | Virtualized list + recycling | ✓ | ✓ | ⬜ |
 | SectionList / sticky headers | ✓ | ✓ (slivers) | ⬜ |
-| TextInput (controlled + IME) | ✓ | ✓ | ⬜ |
-| Switch/Slider/Checkbox/Radio/Picker | ✓ | ✓ | ⬜ |
+| TextInput (controlled + IME) | ✓ | ✓ | 🟡 (controlled; IME later) |
+| Switch / Slider | ✓ | ✓ | ✅ |
+| Checkbox / Radio / Picker | ✓ | ✓ | ⬜ |
+| ActivityIndicator / Progress | ✓ | ✓ | ✅ |
 | Modal/Sheet/Dialog/ActionSheet | ✓ | ✓ | ⬜ |
-| Tabs / BottomNav / Drawer | community | ✓ | ⬜ |
+| Tabs / BottomNav | community | ✓ | 🟡 (tab nav + icon bar) |
+| Drawer | community | ✓ | ⬜ |
+| Divider / Spacer | ✓ | ✓ | ✅ |
 | Pull-to-refresh / swipe actions | ✓ | ✓ | ⬜ |
 | WebView (escape hatch) | community | plugin | ⬜ |
 
@@ -39,9 +44,12 @@ Flutter offer, plus Rust-only advantages. Columns: does the ecosystem support it
 | Capability | RN | Flutter | rax |
 |---|---|---|---|
 | Inline styles | ✓ | ✓ | ✅ |
-| Design tokens / theme | community | ✓ (ThemeData) | ⬜ |
-| Runtime theme switching | ✓ | ✓ | ⬜ |
-| Dark mode / high contrast | ✓ | ✓ | ⬜ |
+| Paint (border/shadow/opacity/radius) | ✓ | ✓ | ✅ |
+| Design tokens / theme | community | ✓ (ThemeData) | ✅ |
+| Runtime theme switching | ✓ | ✓ | ✅ |
+| Dark mode | ✓ | ✓ | ✅ |
+| High contrast | ✓ | ✓ | ⬜ |
+| Reactive paint (theme/anim-driven) | partial | ✓ | ✅ |
 | Variants + headless components | community | partial | ⬜ **(first-class)** |
 | Replace any widget app-wide | — | partial | ⬜ **(registry)** |
 | Per-platform look from one code | partial | ✓ | ⬜ |
@@ -49,8 +57,10 @@ Flutter offer, plus Rust-only advantages. Columns: does the ecosystem support it
 ## Navigation
 | Capability | RN | Flutter | rax |
 |---|---|---|---|
-| Stack / Tab / Modal / Drawer | ✓ | ✓ | ⬜ |
-| Typed routes | partial | partial | ⬜ |
+| Stack navigator (push/pop/replace/reset) | ✓ | ✓ | ✅ |
+| Tab navigation | ✓ | ✓ | ✅ |
+| Modal / Drawer | ✓ | ✓ | ⬜ |
+| Typed routes | partial | partial | ✅ |
 | Deep / universal links | ✓ | ✓ | ⬜ |
 | Shared-element transitions | community | ✓ (Hero) | ⬜ |
 | State restoration | ✓ | ✓ | ⬜ |
@@ -59,8 +69,10 @@ Flutter offer, plus Rust-only advantages. Columns: does the ecosystem support it
 ## Animation & gestures
 | Capability | RN | Flutter | rax |
 |---|---|---|---|
-| Timing / spring / decay | ✓ | ✓ | ⬜ |
-| Gesture recognizers + arena | ✓ | ✓ | ⬜ |
+| Timing + easing animations | ✓ | ✓ | ✅ |
+| Spring / decay | ✓ | ✓ | ⬜ |
+| Tap / long-press / double-tap | ✓ | ✓ | ✅ |
+| Gesture arena (pan/pinch/rotate) | ✓ | ✓ | ⬜ |
 | Gesture-driven animation | ✓ (Reanimated) | ✓ | ⬜ |
 | Layout / shared-element animation | community | ✓ | ⬜ |
 | Off-main-thread animation | ✓ | ✓ | ⬜ |
@@ -69,22 +81,25 @@ Flutter offer, plus Rust-only advantages. Columns: does the ecosystem support it
 ## Text & i18n & a11y
 | Capability | RN | Flutter | rax |
 |---|---|---|---|
+| Font weight / italic / align | ✓ | ✓ | ✅ |
 | Rich text / spans | ✓ | ✓ | ⬜ |
 | Custom fonts / dynamic type | ✓ | ✓ | ⬜ |
 | RTL / bidi | ✓ | ✓ | ⬜ |
-| i18n (ICU, plurals) | community | ✓ (intl) | ⬜ |
-| Screen-reader support | ✓ | ✓ | ⬜ |
+| i18n (catalog + interpolation) | community | ✓ (intl) | 🟡 (ICU/plurals later) |
+| Screen-reader labels + roles | ✓ | ✓ | 🟡 |
 | A11y as release gate | — | — | ⬜ **(policy)** |
 
 ## Data, async, storage
 | Capability | RN | Flutter | rax |
 |---|---|---|---|
-| HTTP / fetch | ✓ | ✓ | ⬜ |
+| HTTP / fetch | ✓ | ✓ | 🟡 (client trait + mock) |
 | WebSocket / SSE / GraphQL | community | community | ⬜ |
+| Resource (async data + loading state) | community | community | ✅ |
 | Query cache (react-query-like) | community | community | ⬜ |
-| KV + SQLite + secure storage | community | ✓ | ⬜ |
+| KV storage (+ persisted signals) | community | ✓ | ✅ |
+| SQLite + secure storage | community | ✓ | ⬜ |
 | Offline-first sync | community | community | ⬜ |
-| Async runtime (no GC pauses) | JS event loop | Dart isolates | ⬜ **(Rust async)** |
+| Async runtime (no GC pauses) | JS event loop | Dart isolates | ✅ **(Rust async)** |
 
 ## Device & platform APIs
 | Capability | RN | Flutter | rax |

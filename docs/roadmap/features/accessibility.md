@@ -4,8 +4,8 @@ First-class, never optional. Map to VoiceOver/TalkBack (and ARIA on web). A
 release that fails the a11y gate does not ship. ⬜ planned.
 
 ## Semantics
-- ⬜ roles (button/header/image/link/adjustable/search/…)
-- ⬜ label / hint / value / description
+- 🟡 roles (button/header/image/link/adjustable/search/…)
+- 🟡 label / hint / value / description
 - ⬜ state (selected/checked/disabled/expanded/busy)
 - ⬜ traits/properties, live regions (announcements)
 - ⬜ grouping / merging semantics, hidden-from-a11y

@@ -4,7 +4,7 @@ The hardest parity area (controlled input + IME). Goal: match RN `TextInput` and
 Flutter `TextField`/`Form` completely. ⬜ planned unless noted.
 
 ## TextInput / TextField
-- ⬜ controlled value (value ↔ signal, two-way, race-free)
+- 🟡 controlled value (value ↔ signal, two-way, race-free)
 - ⬜ uncontrolled / defaultValue
 - ⬜ single-line + multi-line (auto-grow, max lines)
 - ⬜ placeholder, prefix/suffix, clear button

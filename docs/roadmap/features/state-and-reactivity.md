@@ -9,8 +9,8 @@ surgical. ✅ · 🟡 · ⬜.
 - ✅ glitch-free propagation, batching, untracked reads
 - ✅ explicit `Runtime` + ownership scopes (auto-dispose)
 - ⬜ stores (struct-of-signals) + selectors
-- ⬜ context / providers (dependency injection down the tree)
-- ⬜ `Resource` (async-aware signal: loading/error/data)
+- ✅ context / providers (dependency injection down the tree)
+- ✅ `Resource` (async-aware signal: loading/error/data)
 - ⬜ derived collections (fine-grained list reactivity, `keyed_for`)
 - ⬜ writable computed / two-way bindings
 - ⬜ signal equality customization / structural memo

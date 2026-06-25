@@ -4,8 +4,8 @@ Match RN Animated/Reanimated and Flutter's animation framework. Driven by the
 scheduler's frame loop. ⬜ planned.
 
 ## Core
-- ⬜ animated values/signals driven on the frame loop
-- ⬜ timing animations (duration + easing curves: linear/ease/cubic-bezier/steps)
+- 🟡 animated values/signals driven on the frame loop
+- 🟡 timing animations (duration + easing curves: linear/ease/cubic-bezier/steps)
 - ⬜ spring animations (mass/stiffness/damping, velocity)
 - ⬜ decay / fling
 - ⬜ keyframes / sequences / staggers

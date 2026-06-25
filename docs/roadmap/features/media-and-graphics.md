@@ -4,13 +4,13 @@ Match RN Image/`expo-av`/`react-native-svg` and Flutter's image/canvas/painting.
 ⬜ planned.
 
 ## Images
-- ⬜ sources: network, bundled asset, local file, data-URI, memory
+- 🟡 sources: network, bundled asset, local file, data-URI, memory
 - ⬜ async decode off the UI thread
 - ⬜ in-memory + disk cache, cache control, prefetch
 - ⬜ resize modes (cover/contain/stretch/center/repeat)
 - ⬜ placeholder + fade-in, blurhash/thumbhash, progressive
 - ⬜ priority, cancellation, retry
-- ⬜ tint/recolor, rounded corners, borders
+- 🟡 tint/recolor, rounded corners, borders
 - ⬜ animated formats (GIF/APNG/animated WebP)
 - ⬜ HDR / wide-gamut, downsampling, density-aware `@2x/@3x`
 - ⬜ error/loading callbacks

@@ -5,13 +5,13 @@ competing recognizers. ✅ · 🟡 · ⬜.
 
 ## Pointer / touch
 - ✅ tap (via event seam)
-- ⬜ multi-touch pointers (down/move/up/cancel) with ids
+- 🟡 multi-touch pointers (down/move/up/cancel) with ids
 - ⬜ pressed/hover/focus states (Pressable)
 - ⬜ hit-testing control (pointer-events, hitSlop, z-order aware)
 
 ## Recognizers
-- ⬜ tap, double-tap, multi-tap
-- ⬜ long-press (with duration, movement tolerance)
+- ✅ tap, double-tap, multi-tap
+- ✅ long-press (with duration, movement tolerance)
 - ⬜ pan / drag (with thresholds, axis lock)
 - ⬜ pinch / zoom
 - ⬜ rotation

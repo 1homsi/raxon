@@ -24,22 +24,22 @@ styleable, with a headless core, and replaceable via the theme registry
 ## Text & display
 - 🟡 `Text` with font family/weight/size/color/line-height/align/truncation
 - ⬜ Rich text / spans (inline styles, links, inline images)
-- ⬜ `Icon` (vector icon set + custom)
-- ⬜ `Image` (network/asset/file, placeholder, fade-in, resize modes)
+- ✅ `Icon` (vector icon set + custom)
+- 🟡 `Image` (source + tint; network/placeholder/fade-in/resize modes later)
 - ⬜ `Avatar`
 - ⬜ `Badge`
-- ⬜ `Divider` / `Separator`
+- ✅ `Divider` / `Separator`
 - ⬜ `Card` primitive
 - ⬜ `Chip` / `Tag`
 - ⬜ `Tooltip`
 - ⬜ `Skeleton` / shimmer placeholder
 
 ## Input & controls
-- ⬜ `TextInput` / `TextField` (single + multi-line) — see [text-input](text-input-and-forms.md)
-- ⬜ `Switch` / `Toggle`
+- 🟡 `TextInput` / `TextField` (single + multi-line) — see [text-input](text-input-and-forms.md)
+- ✅ `Switch` / `Toggle`
 - ⬜ `Checkbox`
 - ⬜ `Radio` / `RadioGroup`
-- ⬜ `Slider` (single + range)
+- ✅ `Slider` (single + range)
 - ⬜ `Stepper`
 - ⬜ `SegmentedControl`
 - ⬜ `Picker` / `Select` / `Dropdown`
@@ -50,8 +50,8 @@ styleable, with a headless core, and replaceable via the theme registry
 - ⬜ `ColorPicker`
 
 ## Feedback & status
-- ⬜ `ActivityIndicator` / `Spinner`
-- ⬜ `ProgressBar` (linear) / `ProgressRing` (circular)
+- ✅ `ActivityIndicator` / `Spinner`
+- ✅ `ProgressBar` (linear) / `ProgressRing` (circular)
 - ⬜ `Toast` / `Snackbar`
 - ⬜ `Alert` / `Dialog`
 - ⬜ `ActionSheet`

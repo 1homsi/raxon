@@ -3,7 +3,7 @@
 Match Flutter `intl` / RN i18n ecosystems. ⬜ planned.
 
 ## Messages & translation
-- ⬜ message catalogs (typed keys, compile-checked)
+- 🟡 message catalogs (typed keys, compile-checked)
 - ⬜ ICU MessageFormat (interpolation, select, plurals, gender)
 - ⬜ pluralization rules per locale
 - ⬜ runtime locale switching (no rebuild)

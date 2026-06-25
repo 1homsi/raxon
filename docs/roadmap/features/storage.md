@@ -4,10 +4,10 @@ Match RN AsyncStorage/MMKV/SQLite/MMKV/SecureStore and Flutter
 shared_preferences/sqflite/hive/secure_storage. ⬜ planned.
 
 ## Key-value
-- ⬜ simple async KV store (prefs) — typed
+- ✅ simple async KV store (prefs) — typed
 - ⬜ fast synchronous KV (MMKV-style)
 - ⬜ namespaced / scoped stores
-- ⬜ reactive storage (persisted signals)
+- ✅ reactive storage (persisted signals)
 
 ## Structured / database
 - ⬜ SQLite (`rusqlite`) with a typed query layer

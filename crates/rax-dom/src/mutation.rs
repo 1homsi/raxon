@@ -72,6 +72,8 @@ pub enum WidgetKind {
     /// A camera preview view that optionally decodes QR codes (maps to an
     /// `AVCaptureSession`-backed `UIView`).
     Camera,
+    /// An embedded web view (WKWebView). Receives a URL or HTML string via Attribute::Url.
+    WebView,
 }
 
 /// A local notification to schedule via the UserNotifications framework.
@@ -298,6 +300,10 @@ pub enum Attribute {
     KeyboardType(KeyboardType),
     /// Rich text with inline spans (overrides `Text` if present).
     RichText(Vec<TextSpan>),
+    /// URL to load in a WebView widget.
+    Url(String),
+    /// Raw HTML to load in a WebView widget.
+    Html(String),
 }
 
 /// A text span with inline styling.
@@ -563,4 +569,8 @@ pub enum Mutation {
         /// The localized reason string shown to the user.
         reason: String,
     },
+    /// Start receiving location updates. Results arrive via `Event::LocationUpdated`.
+    StartLocation,
+    /// Stop location updates.
+    StopLocation,
 }

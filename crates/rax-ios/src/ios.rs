@@ -71,6 +71,12 @@ thread_local! {
     // Biometric authentication results queued from the reply block (arbitrary thread).
     // Drained in handle_tick and dispatched as Event::BiometricResult.
     static PENDING_BIOMETRIC: RefCell<Vec<(bool, Option<String>)>> = const { RefCell::new(Vec::new()) };
+    // GPS location fixes queued from the CLLocationManager delegate.
+    static PENDING_LOCATIONS: RefCell<Vec<(f64, f64, f64)>> = const { RefCell::new(Vec::new()) };
+    // Set to true if location permission was denied.
+    static PENDING_LOCATION_DENIED: Cell<bool> = const { Cell::new(false) };
+    // The CLLocationManager instance (raw pointer, retained manually).
+    static LOCATION_MANAGER: RefCell<Option<*mut AnyObject>> = const { RefCell::new(None) };
 }
 
 fn handle_tap(tag_bits: u64) {
@@ -106,6 +112,13 @@ fn handle_tick() {
         std::mem::take(&mut *v)
     });
 
+    // Drain GPS fixes queued by LocationDelegate.
+    let location_fixes: Vec<(f64, f64, f64)> = PENDING_LOCATIONS.with(|q| {
+        let mut v = q.borrow_mut();
+        std::mem::take(&mut *v)
+    });
+    let location_denied = PENDING_LOCATION_DENIED.with(|c| c.replace(false));
+
     STATE.with(|s| {
         if let Some(state) = s.borrow().as_ref() {
             // Feed the platform safe-area insets to the runtime each frame; it
@@ -122,6 +135,14 @@ fn handle_tick() {
             };
             let mut app = state.app.borrow_mut();
             app.set_color_scheme(scheme);
+            // Detect high-contrast / darker system colors (UIAccessibilityIsDarkerSystemColorsEnabled).
+            let high_contrast = unsafe {
+                extern "C" {
+                    fn UIAccessibilityIsDarkerSystemColorsEnabled() -> bool;
+                }
+                UIAccessibilityIsDarkerSystemColorsEnabled()
+            };
+            app.set_high_contrast(high_contrast);
             app.set_safe_area(EdgeInsets {
                 top: insets.top as f32,
                 right: insets.right as f32,
@@ -145,6 +166,13 @@ fn handle_tick() {
             // Dispatch queued biometric results into the event system.
             for (success, error) in biometric_results {
                 state.event_sink.dispatch(Event::BiometricResult { success, error });
+            }
+            // Dispatch queued GPS location fixes.
+            for (latitude, longitude, accuracy) in location_fixes {
+                state.event_sink.dispatch(Event::LocationUpdated { latitude, longitude, accuracy });
+            }
+            if location_denied {
+                state.event_sink.dispatch(Event::LocationDenied);
             }
             app.tick();
         }
@@ -520,6 +548,59 @@ define_class!(
                 let value = unsafe { (*ns_str).to_string() };
 
                 PENDING_QR.with(|q| q.borrow_mut().push((tag, value)));
+            }
+        }
+    }
+);
+
+define_class!(
+    /// CLLocationManagerDelegate that queues GPS fixes and auth denials for the next tick.
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "RaxLocationDelegate"]
+    struct LocationDelegate;
+
+    unsafe impl NSObjectProtocol for LocationDelegate {}
+
+    impl LocationDelegate {
+        /// `locationManager:didUpdateLocations:` — fires when new fixes arrive.
+        #[unsafe(method(locationManager:didUpdateLocations:))]
+        fn did_update_locations(&self, _manager: &AnyObject, locations: &NSMutableArray<AnyObject>) {
+            let count: usize = unsafe { msg_send![locations, count] };
+            if count == 0 {
+                return;
+            }
+            let last: *mut AnyObject = unsafe { msg_send![locations, objectAtIndex: count - 1] };
+            if last.is_null() {
+                return;
+            }
+            // CLLocationCoordinate2D = {CLLocationDegrees latitude; CLLocationDegrees longitude;}
+            // where CLLocationDegrees = f64.  The struct has the same ABI as CGPoint = {f64, f64}
+            // on arm64 (System-V / Apple ABI: two f64 in registers or on stack).
+            // We reuse CGPoint (which already implements objc2::Encode) to receive the return
+            // value and interpret x = latitude, y = longitude.
+            let (lat, lon): (f64, f64) = unsafe {
+                let coord: CGPoint = msg_send![last, coordinate];
+                // x maps to latitude (first field), y maps to longitude (second field).
+                (coord.x, coord.y)
+            };
+            let accuracy: f64 = unsafe { msg_send![last, horizontalAccuracy] };
+            PENDING_LOCATIONS.with(|q| q.borrow_mut().push((lat, lon, accuracy)));
+        }
+
+        /// `locationManager:didFailWithError:` — treat failures as denied.
+        #[unsafe(method(locationManager:didFailWithError:))]
+        fn did_fail(&self, _manager: &AnyObject, _error: &AnyObject) {
+            PENDING_LOCATION_DENIED.with(|c| c.set(true));
+        }
+
+        /// `locationManagerDidChangeAuthorization:` — fires on iOS 14+ when status changes.
+        #[unsafe(method(locationManagerDidChangeAuthorization:))]
+        fn did_change_auth(&self, manager: &AnyObject) {
+            // kCLAuthorizationStatusDenied = 2, kCLAuthorizationStatusRestricted = 1
+            let status: isize = unsafe { msg_send![manager, authorizationStatus] };
+            if status == 1 || status == 2 {
+                PENDING_LOCATION_DENIED.with(|c| c.set(true));
             }
         }
     }
@@ -956,6 +1037,23 @@ impl Backend for UiKitBackend {
                         let v = unsafe { UIView::initWithFrame(self.mtm.alloc(), zero) };
                         unsafe { v.setTag(id.to_u64() as isize) };
                         v
+                    }
+                    WidgetKind::WebView => {
+                        // Allocate WKWebView using raw msg_send! (avoids a WebKit crate dep).
+                        // WKWebView -> UIScrollView -> UIView; we wrap as UIView.
+                        unsafe {
+                            let wv: *mut AnyObject = msg_send![class!(WKWebView), alloc];
+                            let wv: *mut AnyObject = msg_send![wv, initWithFrame: zero
+                                                                    configuration: std::ptr::null::<AnyObject>()];
+                            if wv.is_null() {
+                                // Fallback: plain UIView (shouldn't happen on a real device)
+                                UIView::initWithFrame(self.mtm.alloc(), zero)
+                            } else {
+                                let wv_view: *mut UIView = wv as *mut UIView;
+                                Retained::retain(wv_view)
+                                    .expect("WKWebView init returned a valid object")
+                            }
+                        }
                     }
                 };
                 self.views.insert(id.to_u64(), view);
@@ -1398,6 +1496,23 @@ impl Backend for UiKitBackend {
                             let _: () = msg_send![&*view, setSemanticContentAttribute: val];
                         }
                     }
+                    Attribute::Url(url) => {
+                        unsafe {
+                            let ns_url_str = NSString::from_str(&url);
+                            let ns_url: *mut AnyObject = msg_send![class!(NSURL), URLWithString: &*ns_url_str];
+                            if !ns_url.is_null() {
+                                let request: *mut AnyObject = msg_send![class!(NSURLRequest), requestWithURL: ns_url];
+                                let _: () = msg_send![&*view, loadRequest: request];
+                            }
+                        }
+                    }
+                    Attribute::Html(html) => {
+                        unsafe {
+                            let ns_html = NSString::from_str(&html);
+                            let base_url: *mut AnyObject = std::ptr::null_mut();
+                            let _: () = msg_send![&*view, loadHTMLString: &*ns_html baseURL: base_url];
+                        }
+                    }
                 }
             }
             Mutation::SetFrame { id, rect } => {
@@ -1656,6 +1771,43 @@ impl Backend for UiKitBackend {
                         removePendingNotificationRequestsWithIdentifiers: &*ids
                     ];
                 }
+            }
+            Mutation::StartLocation => {
+                unsafe {
+                    let mgr: *mut AnyObject = msg_send![class!(CLLocationManager), new];
+                    if mgr.is_null() {
+                        return;
+                    }
+                    let delegate: *mut AnyObject = msg_send![LocationDelegate::class(), new];
+                    let _: () = msg_send![mgr, setDelegate: delegate];
+                    // Request when-in-use authorization (matches typical app usage).
+                    let _: () = msg_send![mgr, requestWhenInUseAuthorization];
+                    // Start streaming location updates.
+                    let _: () = msg_send![mgr, startUpdatingLocation];
+                    // Store the manager so it stays alive. objc `new` gives +1 retain;
+                    // we take ownership here without an extra retain.
+                    LOCATION_MANAGER.with(|lm| {
+                        // Release any previous manager first.
+                        if let Some(old) = lm.borrow_mut().take() {
+                            let _: () = msg_send![old, stopUpdatingLocation];
+                            objc_release(old);
+                        }
+                        *lm.borrow_mut() = Some(mgr);
+                    });
+                    // The delegate was created with `new` (+1) — keep it alive via the
+                    // manager's delegate property (which retains it). Release our +1.
+                    objc_release(delegate);
+                }
+            }
+            Mutation::StopLocation => {
+                LOCATION_MANAGER.with(|lm| {
+                    if let Some(mgr) = lm.borrow_mut().take() {
+                        unsafe {
+                            let _: () = msg_send![mgr, stopUpdatingLocation];
+                            objc_release(mgr);
+                        }
+                    }
+                });
             }
             Mutation::AuthenticateBiometric { reason } => {
                 unsafe {

@@ -170,6 +170,21 @@ impl Tree {
         self.create(WidgetKind::Camera)
     }
 
+    /// Creates an embedded web view (WKWebView on iOS).
+    pub fn create_web_view(&mut self) -> WidgetId {
+        self.create(WidgetKind::WebView)
+    }
+
+    /// Starts CoreLocation GPS updates. Results arrive as global `Event::LocationUpdated`.
+    pub fn start_location(&mut self) {
+        self.host.emit(Mutation::StartLocation);
+    }
+
+    /// Stops CoreLocation GPS updates.
+    pub fn stop_location(&mut self) {
+        self.host.emit(Mutation::StopLocation);
+    }
+
     /// Emits a content-size update for a scroll container.
     pub fn set_content_size(&mut self, id: WidgetId, size: rax_core::Size) {
         if self.nodes.get(id.0).is_some() {

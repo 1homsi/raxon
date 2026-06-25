@@ -12,13 +12,13 @@
 //! native [`switch`](crate::switch) and [`slider`](crate::slider).
 
 use rax_core::{AlignItems, Color, EdgeInsets, JustifyContent};
-use rax_dom::{Tree, WidgetId};
+use rax_dom::{GesturePhase, Tree, WidgetId};
 use rax_reactive::{create_effect, create_signal, Signal};
 
 use crate::container::{column, row};
 use crate::dynamic::dynamic;
 use crate::image::{icon, image};
-use crate::modifier::ViewExt;
+use crate::modifier::{PanInfo, ViewExt};
 use crate::text::text;
 use crate::text_input::text_input;
 use crate::view::{boxed, BoxedView, View, ViewSequence};
@@ -1010,4 +1010,37 @@ pub fn error_overlay(message: rax_reactive::Signal<Option<String>>) -> impl View
         ),
         None => boxed(column(()).size(0.0, 0.0)),
     })
+}
+
+/// Returns a `(x_signal, y_signal, handler)` triple for gesture-driven animation.
+///
+/// Pass `handler` to `.on_pan()` on a view; use `x_signal.get()` and
+/// `y_signal.get()` for transforms or offsets. When `spring_back` is true, both
+/// signals animate back to `0.0` (via a spring) when the gesture ends.
+///
+/// # Example
+/// ```rust
+/// let (offset_x, offset_y, pan_handler) = pan_animation(true);
+/// column(content())
+///     .on_pan(pan_handler)
+///     .translate(move || offset_x.get(), move || offset_y.get())
+/// ```
+pub fn pan_animation(spring_back: bool) -> (Signal<f32>, Signal<f32>, impl FnMut(PanInfo)) {
+    let x = create_signal(0.0f32);
+    let y = create_signal(0.0f32);
+    let handler = move |info: PanInfo| {
+        x.set(info.translation.x);
+        y.set(info.translation.y);
+        if spring_back && info.phase == GesturePhase::Ended {
+            // Animate back to 0 via spring physics. Create a spring signal
+            // from the current offset to 0 and relay each frame into x/y.
+            let sx = x;
+            let spring_x = rax_anim::spring(sx.get(), 0.0, rax_anim::Spring::default());
+            create_effect(move || sx.set(spring_x.get()));
+            let sy = y;
+            let spring_y = rax_anim::spring(sy.get(), 0.0, rax_anim::Spring::default());
+            create_effect(move || sy.set(spring_y.get()));
+        }
+    };
+    (x, y, handler)
 }

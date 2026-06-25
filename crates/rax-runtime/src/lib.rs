@@ -42,6 +42,14 @@ thread_local! {
     /// Biometric authentication reasons queued by [`authenticate_biometric`]. Drained by [`App::tick`].
     static PENDING_BIOMETRICS: RefCell<Vec<String>> =
         const { RefCell::new(Vec::new()) };
+
+    /// Whether a location-start was requested (via [`start_location`]). Drained by [`App::tick`].
+    static PENDING_LOCATION_STARTS: RefCell<bool> =
+        const { RefCell::new(false) };
+
+    /// Whether a location-stop was requested (via [`stop_location`]). Drained by [`App::tick`].
+    static PENDING_LOCATION_STOPS: RefCell<bool> =
+        const { RefCell::new(false) };
 }
 
 // ---------------------------------------------------------------------------
@@ -195,6 +203,10 @@ struct BackdropSlot(Rc<RefCell<Option<Backdrop>>>);
 #[derive(Clone, Copy)]
 struct ColorSchemeCtx(Signal<ColorScheme>);
 
+/// Context handle wrapping the reactive high-contrast signal.
+#[derive(Clone, Copy)]
+struct HighContrastCtx(Signal<bool>);
+
 /// Sets the [`Backdrop`] (the fill behind the safe area) from within view code.
 ///
 /// Call this while building your root view; the running [`App`] picks it up.
@@ -225,6 +237,30 @@ pub fn use_color_scheme() -> Signal<ColorScheme> {
         .expect("use_color_scheme must be called within a running App")
 }
 
+/// Whether the iOS "Increase Contrast" / "Darker System Colors" accessibility
+/// setting is currently enabled. Returns a reactive signal that updates each
+/// frame when the value changes.
+///
+/// Must be called while building views under a running [`App`].
+pub fn use_high_contrast() -> Signal<bool> {
+    use_context::<HighContrastCtx>()
+        .map(|c| c.0)
+        .expect("use_high_contrast must be called within a running App")
+}
+
+/// Starts GPS location updates. Results arrive as global `Event::LocationUpdated`.
+///
+/// Call from within a reactive context (e.g. inside a `create_effect` or mount
+/// callback). Stop with [`stop_location`].
+pub fn start_location() {
+    PENDING_LOCATION_STARTS.with(|q| *q.borrow_mut() = true);
+}
+
+/// Stops GPS location updates.
+pub fn stop_location() {
+    PENDING_LOCATION_STOPS.with(|q| *q.borrow_mut() = true);
+}
+
 /// A running application: a mounted view tree plus the per-frame drive loop.
 pub struct App {
     tree: Tree,
@@ -253,6 +289,10 @@ pub struct App {
     content_sizes: HashMap<WidgetId, Size>,
     /// Wall-clock of the previous tick, for animation deltas.
     last_tick: Option<std::time::Instant>,
+    /// Whether the system high-contrast / darker-colors accessibility setting is on.
+    high_contrast: bool,
+    /// Reactive signal for high contrast, read by [`use_high_contrast`].
+    high_contrast_signal: Signal<bool>,
 }
 
 impl App {
@@ -267,6 +307,7 @@ impl App {
         let backdrop = Rc::new(RefCell::new(None));
         let backdrop_for_ctx = backdrop.clone();
         let mut scheme_slot = None;
+        let mut high_contrast_slot = None;
         let (root, scope) = create_root(|| {
             // Provide the context handles before building, so view code can call
             // set_backdrop()/use_color_scheme() during construction.
@@ -274,6 +315,9 @@ impl App {
             let scheme = create_signal(ColorScheme::Light);
             provide_context(ColorSchemeCtx(scheme));
             scheme_slot = Some(scheme);
+            let hc = create_signal(false);
+            provide_context(HighContrastCtx(hc));
+            high_contrast_slot = Some(hc);
             mount(&mut tree, make_view())
         });
         let mut app = App {
@@ -290,6 +334,8 @@ impl App {
             frames: HashMap::new(),
             content_sizes: HashMap::new(),
             last_tick: None,
+            high_contrast: false,
+            high_contrast_signal: high_contrast_slot.expect("create_root ran the builder"),
         };
         // Register a global handler that routes DeepLink events to the
         // thread-local DEEP_LINK_HANDLER set by on_deep_link().
@@ -353,6 +399,15 @@ impl App {
             self.color_scheme = scheme;
             self.scheme_signal.set(scheme);
             self.refresh_backdrop();
+        }
+    }
+
+    /// Updates the high-contrast / darker-colors accessibility state. Pushes it
+    /// into the reactive [`use_high_contrast`] signal so content can adapt.
+    pub fn set_high_contrast(&mut self, hc: bool) {
+        if hc != self.high_contrast {
+            self.high_contrast = hc;
+            self.high_contrast_signal.set(hc);
         }
     }
 
@@ -426,6 +481,24 @@ impl App {
         });
         for reason in biometrics {
             self.tree.authenticate_biometric(reason);
+        }
+
+        // Drain location start/stop requests.
+        let want_start = PENDING_LOCATION_STARTS.with(|q| {
+            let v = *q.borrow();
+            *q.borrow_mut() = false;
+            v
+        });
+        let want_stop = PENDING_LOCATION_STOPS.with(|q| {
+            let v = *q.borrow();
+            *q.borrow_mut() = false;
+            v
+        });
+        if want_start {
+            self.tree.start_location();
+        }
+        if want_stop {
+            self.tree.stop_location();
         }
 
         self.tree.run_dynamic(); // events/async/anim may have dirtied dynamic subtrees

@@ -41,7 +41,7 @@ Flutter offer, plus Rust-only advantages. Columns: does the ecosystem support it
 | Drawer | community | ✓ | ✅ (composed) |
 | Divider / Spacer | ✓ | ✓ | ✅ |
 | Pull-to-refresh / swipe actions | ✓ | ✓ | ✅ pull-to-refresh; ⬜ swipe actions |
-| WebView (escape hatch) | community | plugin | ⬜ |
+| WebView (escape hatch) | community | plugin | ✅ (`web_view(url)` / `web_view_html(html)` — WKWebView backed) |
 
 ## Styling & theming
 | Capability | RN | Flutter | rax |
@@ -51,7 +51,7 @@ Flutter offer, plus Rust-only advantages. Columns: does the ecosystem support it
 | Design tokens / theme | community | ✓ (ThemeData) | ✅ |
 | Runtime theme switching | ✓ | ✓ | ✅ |
 | Dark mode | ✓ | ✓ | ✅ |
-| High contrast | ✓ | ✓ | ⬜ |
+| High contrast | ✓ | ✓ | ✅ (`use_high_contrast()` signal — UIAccessibilityIsDarkerSystemColorsEnabled) |
 | Reactive paint (theme/anim-driven) | partial | ✓ | ✅ |
 | Variants + headless components | community | partial | ⬜ **(first-class)** |
 | Replace any widget app-wide | — | partial | ⬜ **(registry)** |
@@ -76,7 +76,7 @@ Flutter offer, plus Rust-only advantages. Columns: does the ecosystem support it
 | Spring / decay | ✓ | ✓ | ✅ |
 | Tap / long-press / double-tap | ✓ | ✓ | ✅ |
 | Gesture arena (pan/pinch/rotate) | ✓ | ✓ | 🟡 (pan ✅; pinch ✅; rotate ✅; arena ⬜) |
-| Gesture-driven animation | ✓ (Reanimated) | ✓ | ⬜ |
+| Gesture-driven animation | ✓ (Reanimated) | ✓ | ✅ (`pan_animation(spring_back)` → (x, y, handler); spring-back on release) |
 | Layout / shared-element animation | community | ✓ | ⬜ |
 | Off-main-thread animation | ✓ | ✓ | ⬜ |
 | 120fps | ✓ | ✓ | ⬜ |
@@ -108,7 +108,7 @@ Flutter offer, plus Rust-only advantages. Columns: does the ecosystem support it
 | Capability | RN | Flutter | rax |
 |---|---|---|---|
 | Camera / media picker | ✓ | ✓ | ✅ camera + QR scanner (AVFoundation); ⬜ media picker |
-| Location / maps | ✓ | ✓ | ⬜ |
+| Location / maps | ✓ | ✓ | 🟡 GPS ✅ (`start_location()` — CLLocationManager → `Event::LocationUpdated`); maps ⬜ |
 | Push + local notifications | ✓ | ✓ | 🟡 local ✅ (`schedule_notification`); push ⬜ |
 | BLE / NFC | community | plugins | ⬜ |
 | Biometrics / secure auth | ✓ | ✓ | 🟡 biometrics ✅ (`authenticate_biometric`); OAuth/passkeys ⬜ |

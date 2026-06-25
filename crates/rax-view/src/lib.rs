@@ -49,14 +49,16 @@ mod spacer;
 mod text;
 mod text_input;
 mod view;
+mod web_view;
 
 pub use button::{button, Button};
 pub use camera::{camera_scanner, CameraScanner};
 pub use composite::{
     action_sheet, alert, app_bar, avatar, badge, bottom_sheet, card, checkbox, chip, drawer,
-    error_overlay, fade_transition, grid, item_separator, modal, network_image, picker, radio,
-    search_bar, toast, Avatar, Badge, Card, Checkbox, Chip, Radio,
+    error_overlay, fade_transition, grid, item_separator, modal, network_image, pan_animation,
+    picker, radio, search_bar, toast, Avatar, Badge, Card, Checkbox, Chip, Radio,
 };
+pub use web_view::{web_view, web_view_html, WebView};
 pub use container::{column, row, stack, Container, Stack};
 pub use controls::{segmented, slider, stepper, switch, Segmented, Slider, Stepper, Switch};
 pub use dynamic::{dynamic, Dynamic};

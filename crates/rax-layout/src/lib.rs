@@ -267,7 +267,7 @@ fn measure_leaf(
         WidgetKind::Stepper => (94.0, 29.0),
         // TextArea grows to fill; give a sensible minimum height.
         WidgetKind::TextArea => (180.0, line_h.max(80.0)),
-        WidgetKind::View | WidgetKind::Scroll | WidgetKind::Stack | WidgetKind::Camera => (0.0, 0.0),
+        WidgetKind::View | WidgetKind::Scroll | WidgetKind::Stack | WidgetKind::Camera | WidgetKind::WebView => (0.0, 0.0),
     };
 
     taffy::Size {

@@ -202,6 +202,17 @@ pub enum Event {
         /// An error message if authentication failed, or `None` on success.
         error: Option<String>,
     },
+    /// GPS location update from CoreLocation.
+    LocationUpdated {
+        /// Latitude in degrees.
+        latitude: f64,
+        /// Longitude in degrees.
+        longitude: f64,
+        /// Horizontal accuracy in metres.
+        accuracy: f64,
+    },
+    /// Location permission was denied by the user.
+    LocationDenied,
 }
 
 /// The lifecycle phase of a continuous gesture such as a pan.
@@ -263,6 +274,10 @@ pub enum EventKind {
     BiometricResult,
     /// [`Event::RotateChanged`].
     RotateChanged,
+    /// [`Event::LocationUpdated`].
+    LocationUpdated,
+    /// [`Event::LocationDenied`].
+    LocationDenied,
 }
 
 impl Event {
@@ -291,6 +306,8 @@ impl Event {
             Event::DeepLink { .. } => EventKind::DeepLink,
             Event::BiometricResult { .. } => EventKind::BiometricResult,
             Event::RotateChanged { .. } => EventKind::RotateChanged,
+            Event::LocationUpdated { .. } => EventKind::LocationUpdated,
+            Event::LocationDenied => EventKind::LocationDenied,
         }
     }
 
@@ -318,7 +335,9 @@ impl Event {
             | Event::KeyboardWillHide
             | Event::AppLifecycle(_)
             | Event::DeepLink { .. }
-            | Event::BiometricResult { .. } => None,
+            | Event::BiometricResult { .. }
+            | Event::LocationUpdated { .. }
+            | Event::LocationDenied => None,
             Event::RotateChanged { target, .. } => Some(target),
         }
     }

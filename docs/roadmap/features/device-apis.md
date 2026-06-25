@@ -9,7 +9,7 @@ the union of RN community modules + Flutter plugins + Expo SDK. ⬜ planned.
 - ⬜ device motion / orientation, pedometer
 - ⬜ proximity, ambient light
 - ✅ haptics (`haptic(HapticStyle)` — UIImpactFeedbackGenerator / UINotificationFeedbackGenerator / UISelectionFeedbackGenerator)
-- ⬜ battery status, thermal state
+- ✅ battery status (`use_battery_level() -> Signal<f32>`, `use_battery_charging() -> Signal<bool>` — UIDevice, polled every 60 ticks)
 - ⬜ flashlight / torch
 
 ## Location & maps
@@ -21,13 +21,13 @@ the union of RN community modules + Flutter plugins + Expo SDK. ⬜ planned.
 ## Connectivity
 - ⬜ Bluetooth / BLE (central + peripheral)
 - ⬜ NFC (read/write/HCE)
-- ⬜ Wi-Fi info, network reachability/type
+- 🟡 network reachability (`use_network_status() -> Signal<NetworkStatus>`; `update_network_status` platform hook; SCNetworkReachability integration pending)
 - ⬜ nearby / multipeer
 
 ## Camera, media & files
 - ✅ camera capture + QR scanner (AVFoundation-backed); ⬜ image/video picker, media library
 - ⬜ file system (read/write/stream), document picker
-- ⬜ share sheet, open-with, clipboard
+- ✅ share sheet (`share_text(text)` → `UIActivityViewController`); ✅ clipboard (`set_clipboard(text)` → `UIPasteboard`)
 - ⬜ downloads / uploads (background)
 - ⬜ printing, PDF generation
 

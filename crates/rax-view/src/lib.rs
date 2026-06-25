@@ -46,6 +46,7 @@ pub mod layout;
 mod list;
 pub mod map;
 mod modifier;
+pub mod registry;
 mod scroll;
 mod spacer;
 mod text;
@@ -81,7 +82,10 @@ pub use rax_dom::TextSpan;
 pub use text_input::{text_area, text_input, TextArea, TextInput};
 pub use theme::{
     provide_theme, try_use_theme, use_theme, ColorTokens, MotionTokens, RadiusTokens,
-    SpacingTokens, Theme, TypographyTokens,
+    ShadowToken, ShadowTokens, SpacingTokens, Theme, TypographyTokens,
+};
+pub use registry::{
+    is_registered, register_component, resolve_component, unregister_component, ComponentProps,
 };
 pub use view::{boxed, BoxedView, View, ViewSequence};
 pub use layout::{

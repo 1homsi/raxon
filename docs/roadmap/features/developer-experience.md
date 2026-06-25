@@ -6,9 +6,9 @@ Match Expo/RN CLI + Metro + Flutter CLI + DevTools + hot reload. ✅ · 🟡 · 
 - ✅ `rax new <name>` (scaffolds Cargo.toml + src/lib.rs + .gitignore)
 - ✅ `rax run [--target ios-sim|ios]` (prints cargo build command + xcodebuild invocation)
 - ✅ `rax build [--target ios-sim|ios|android|macos]` (prints cargo cross-compile command + Xcode link notes)
-- ⬜ `rax test`, `rax lint`, `rax fmt`
+- ✅ `rax test [-- args]` (runs `cargo test`); `rax lint` (`cargo clippy --all-targets`); `rax fmt [--check]` (`cargo fmt`)
 - ✅ `rax doctor` (checks rustc, cargo, iOS/wasm targets, Xcode CLI tools)
-- ⬜ `rax add` (plugins/dependencies), `rax generate` (codegen/scaffold)
+- ✅ `rax add <crate>` (prints `cargo add` command); ⬜ `rax generate` (codegen/scaffold)
 - ⬜ project templates + starter kits
 
 ## Build & toolchain
@@ -37,7 +37,7 @@ Match Expo/RN CLI + Metro + Flutter CLI + DevTools + hot reload. ✅ · 🟡 · 
 
 ## Error handling & diagnostics
 - ⬜ red-box error overlay (panics + `Result` surfaces) with source mapping
-- ⬜ structured logging via `tracing` → platform log (logcat/oslog/console)
+- ✅ structured logging (`rax-log`: `rax_debug!/info!/warn!/error!` macros; `Level` enum; `set_min_level`; routes to `println!` on iOS → Xcode console)
 - ⬜ great compiler-error ergonomics for the view API (type-erasure boundaries)
 - ⬜ crash reporting / symbolication SDK hooks
 - ⬜ analytics/observability hooks

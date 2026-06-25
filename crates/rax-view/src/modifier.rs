@@ -405,6 +405,60 @@ pub trait ViewExt: View + Sized {
         self.decorate(move |t, id| t.set(id, Attribute::AccessibilityRole(role)))
     }
 
+    // --- conditional style helpers ---
+
+    /// Reduce opacity to 0.4 when `is_disabled()` returns `true`.
+    ///
+    /// Reactive: re-evaluates whenever the signals read inside `is_disabled` change.
+    ///
+    /// # Example
+    /// ```no_run
+    /// button("Save", on_save).disabled_opacity(move || is_saving.get())
+    /// ```
+    fn disabled_opacity(
+        self,
+        is_disabled: impl FnMut() -> bool + 'static,
+    ) -> Decorated<Self, impl FnOnce(&mut Tree, WidgetId)> {
+        let mut is_disabled = is_disabled;
+        self.opacity_fn(move || if is_disabled() { 0.4 } else { 1.0 })
+    }
+
+    /// Make this view fully visible (`opacity = 1.0`) when `condition()` is `true`,
+    /// and invisible (`opacity = 0.0`) — but still laid-out — when it is `false`.
+    ///
+    /// Reactive: re-evaluates whenever the signals read inside `condition` change.
+    ///
+    /// # Example
+    /// ```no_run
+    /// error_label.visible_when(move || has_error.get())
+    /// ```
+    fn visible_when(
+        self,
+        condition: impl FnMut() -> bool + 'static,
+    ) -> Decorated<Self, impl FnOnce(&mut Tree, WidgetId)> {
+        let mut condition = condition;
+        self.opacity_fn(move || if condition() { 1.0 } else { 0.0 })
+    }
+
+    /// Make this view invisible (`opacity = 0.0`) — but still laid-out — when
+    /// `condition()` is `true`, and fully visible when it is `false`.
+    ///
+    /// This is the complement of [`visible_when`](ViewExt::visible_when).
+    ///
+    /// Reactive: re-evaluates whenever the signals read inside `condition` change.
+    ///
+    /// # Example
+    /// ```no_run
+    /// placeholder_text.hidden_when(move || has_content.get())
+    /// ```
+    fn hidden_when(
+        self,
+        condition: impl FnMut() -> bool + 'static,
+    ) -> Decorated<Self, impl FnOnce(&mut Tree, WidgetId)> {
+        let mut condition = condition;
+        self.opacity_fn(move || if condition() { 0.0 } else { 1.0 })
+    }
+
     /// Hides or shows this element from assistive technologies. Set `true` for
     /// decorative elements that add no semantic information.
     fn accessibility_hidden(

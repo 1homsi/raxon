@@ -8,7 +8,7 @@
 
 #![forbid(unsafe_code)]
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Mutex;
@@ -72,6 +72,27 @@ thread_local! {
     /// should be done via `rax::store::store_set` / `store_get`.
     static UI_STATE: RefCell<std::collections::HashMap<String, String>> =
         RefCell::new(std::collections::HashMap::new());
+
+    /// Clipboard writes queued by [`set_clipboard`]. Drained by [`App::tick`].
+    static PENDING_CLIPBOARD_WRITES: RefCell<Vec<String>> =
+        const { RefCell::new(Vec::new()) };
+
+    /// Share-sheet texts queued by [`share_text`]. Drained by [`App::tick`].
+    static PENDING_SHARE_TEXTS: RefCell<Vec<String>> =
+        const { RefCell::new(Vec::new()) };
+
+    /// Reactive signal for battery level [0.0–1.0]. Lazily initialised by
+    /// [`use_battery_level`]; updated by the platform backend via [`update_battery`].
+    static BATTERY_LEVEL: Cell<Option<Signal<f32>>> = const { Cell::new(None) };
+
+    /// Reactive signal for charging state. Lazily initialised by
+    /// [`use_battery_charging`]; updated by the platform backend via [`update_battery`].
+    static BATTERY_CHARGING: Cell<Option<Signal<bool>>> = const { Cell::new(None) };
+
+    /// Reactive signal for network reachability. Lazily initialised by
+    /// [`use_network_status`]; updated by the platform backend via
+    /// [`update_network_status`].
+    static NETWORK_STATUS: Cell<Option<Signal<NetworkStatus>>> = const { Cell::new(None) };
 }
 
 // ---------------------------------------------------------------------------
@@ -183,6 +204,146 @@ pub fn cancel_notification(id: impl Into<String>) {
 /// ```
 pub fn authenticate_biometric(reason: impl Into<String>) {
     PENDING_BIOMETRICS.with(|q| q.borrow_mut().push(reason.into()));
+}
+
+// ---------------------------------------------------------------------------
+// Device API helpers
+// ---------------------------------------------------------------------------
+
+/// Network reachability state reported by the platform backend.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum NetworkStatus {
+    /// Reachability has not been determined yet.
+    Unknown,
+    /// The device has an active internet connection (type unknown).
+    Online,
+    /// The device has no internet connection.
+    Offline,
+    /// Connected via Wi-Fi.
+    WiFi,
+    /// Connected via cellular (mobile data).
+    Cellular,
+}
+
+/// Copy `text` to the system clipboard. The write is applied on the next frame
+/// tick so it is safe to call from within reactive closures or event handlers.
+///
+/// ```no_run
+/// use rax_runtime::set_clipboard;
+///
+/// set_clipboard("Hello, clipboard!");
+/// ```
+pub fn set_clipboard(text: impl Into<String>) {
+    PENDING_CLIPBOARD_WRITES.with(|v| v.borrow_mut().push(text.into()));
+}
+
+/// Present the system share sheet with `text`. The sheet is shown on the next
+/// frame tick so it is safe to call from within reactive closures or event handlers.
+///
+/// ```no_run
+/// use rax_runtime::share_text;
+///
+/// share_text("Check out this link: https://example.com");
+/// ```
+pub fn share_text(text: impl Into<String>) {
+    PENDING_SHARE_TEXTS.with(|v| v.borrow_mut().push(text.into()));
+}
+
+/// Returns a reactive `Signal<f32>` whose value is the current battery charge
+/// level in the range `[0.0, 1.0]`. The signal is updated by the platform
+/// backend roughly once per second. Returns `1.0` if battery level is
+/// unavailable on the current device or platform.
+///
+/// Must be called while building views under a running [`App`].
+///
+/// ```no_run
+/// use rax_runtime::use_battery_level;
+///
+/// let level = use_battery_level();
+/// // level.get() → e.g. 0.85
+/// ```
+pub fn use_battery_level() -> Signal<f32> {
+    BATTERY_LEVEL.with(|slot| {
+        if let Some(sig) = slot.get() {
+            return sig;
+        }
+        let sig = create_signal(1.0f32);
+        slot.set(Some(sig));
+        sig
+    })
+}
+
+/// Returns a reactive `Signal<bool>` that is `true` when the device is
+/// charging (plugged in or full) and `false` when unplugged. The signal is
+/// updated by the platform backend roughly once per second.
+///
+/// Must be called while building views under a running [`App`].
+///
+/// ```no_run
+/// use rax_runtime::use_battery_charging;
+///
+/// let charging = use_battery_charging();
+/// // charging.get() → true / false
+/// ```
+pub fn use_battery_charging() -> Signal<bool> {
+    BATTERY_CHARGING.with(|slot| {
+        if let Some(sig) = slot.get() {
+            return sig;
+        }
+        let sig = create_signal(false);
+        slot.set(Some(sig));
+        sig
+    })
+}
+
+/// Called by the platform backend to push a new battery reading into the
+/// reactive signals exposed by [`use_battery_level`] and
+/// [`use_battery_charging`]. App code should not call this directly.
+pub fn update_battery(level: f32, charging: bool) {
+    BATTERY_LEVEL.with(|slot| {
+        if let Some(sig) = slot.get() {
+            sig.set(level);
+        }
+    });
+    BATTERY_CHARGING.with(|slot| {
+        if let Some(sig) = slot.get() {
+            sig.set(charging);
+        }
+    });
+}
+
+/// Returns a reactive `Signal<NetworkStatus>` that reflects the current
+/// internet reachability of the device. The signal starts as
+/// [`NetworkStatus::Unknown`] and is updated by the platform backend.
+///
+/// Must be called while building views under a running [`App`].
+///
+/// ```no_run
+/// use rax_runtime::{use_network_status, NetworkStatus};
+///
+/// let status = use_network_status();
+/// // status.get() → NetworkStatus::WiFi
+/// ```
+pub fn use_network_status() -> Signal<NetworkStatus> {
+    NETWORK_STATUS.with(|slot| {
+        if let Some(sig) = slot.get() {
+            return sig;
+        }
+        let sig = create_signal(NetworkStatus::Unknown);
+        slot.set(Some(sig));
+        sig
+    })
+}
+
+/// Called by the platform backend to push a new network reachability reading
+/// into the reactive signal exposed by [`use_network_status`]. App code should
+/// not call this directly.
+pub fn update_network_status(status: NetworkStatus) {
+    NETWORK_STATUS.with(|slot| {
+        if let Some(sig) = slot.get() {
+            sig.set(status);
+        }
+    });
 }
 
 /// The fill shown behind the root — i.e. the safe-area region (notch, status
@@ -647,6 +808,22 @@ impl App {
         });
         for (id, secs) in bg_scheds {
             self.tree.schedule_background_task(id, secs);
+        }
+
+        // Drain clipboard writes queued by set_clipboard().
+        let clipboard_writes: Vec<String> = PENDING_CLIPBOARD_WRITES.with(|q| {
+            std::mem::take(&mut *q.borrow_mut())
+        });
+        for text in clipboard_writes {
+            self.tree.set_clipboard(text);
+        }
+
+        // Drain share-sheet texts queued by share_text().
+        let share_texts: Vec<String> = PENDING_SHARE_TEXTS.with(|q| {
+            std::mem::take(&mut *q.borrow_mut())
+        });
+        for text in share_texts {
+            self.tree.share_text(text);
         }
 
         self.tree.run_dynamic(); // events/async/anim may have dirtied dynamic subtrees

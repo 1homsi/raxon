@@ -98,6 +98,8 @@ thread_local! {
     // Frame timestamps for FPS calculation (ring buffer of the last 1 second).
     static FRAME_TIMESTAMPS: RefCell<std::collections::VecDeque<std::time::Instant>> =
         RefCell::new(std::collections::VecDeque::new());
+    // Tick counter used to throttle UIDevice battery polling (once per ~60 ticks).
+    static BATTERY_TICK: Cell<u64> = const { Cell::new(0) };
 }
 
 fn handle_tap(tag_bits: u64) {
@@ -277,6 +279,27 @@ fn handle_tick() {
             }
             app.tick();
             rax_plugin::tick_plugins();
+
+            // Poll UIDevice battery state roughly once per second (~60 ticks).
+            // Battery monitoring must be enabled before reading level/state.
+            BATTERY_TICK.with(|c| {
+                let tick = c.get();
+                c.set(tick.wrapping_add(1));
+                if tick % 60 == 0 {
+                    unsafe {
+                        let device: *mut AnyObject =
+                            msg_send![class!(UIDevice), currentDevice];
+                        let _: () = msg_send![device, setBatteryMonitoringEnabled: true];
+                        // batteryLevel returns -1.0 when monitoring is not enabled
+                        // or the level is unknown; clamp to 0.0 in that case.
+                        let level: f32 = msg_send![device, batteryLevel];
+                        // batteryState: 0=unknown, 1=unplugged, 2=charging, 3=full
+                        let state: isize = msg_send![device, batteryState];
+                        let charging = state == 2 || state == 3;
+                        rax_runtime::update_battery(level.max(0.0), charging);
+                    }
+                }
+            });
 
             // Update FPS counter: keep a sliding window of timestamps for the
             // last 1 second and push the count into the reactive FPS signal.
@@ -2584,6 +2607,43 @@ impl Backend for UiKitBackend {
                         localizedReason: &*reason_ns
                         reply: &*reply
                     ];
+                }
+            }
+            Mutation::SetClipboard { text } => {
+                // UIPasteboard.general.string = text
+                unsafe {
+                    let pb: *mut AnyObject =
+                        msg_send![class!(UIPasteboard), generalPasteboard];
+                    let ns = NSString::from_str(&text);
+                    let _: () = msg_send![pb, setString: &*ns];
+                }
+            }
+            Mutation::ShareText { text } => {
+                // Present UIActivityViewController from the root view controller.
+                unsafe {
+                    let ns_text = NSString::from_str(&text);
+                    // NSArray arrayWithObject: wraps a single item.
+                    let items: *mut AnyObject =
+                        msg_send![class!(NSArray), arrayWithObject: &*ns_text];
+                    let vc: *mut AnyObject =
+                        msg_send![class!(UIActivityViewController), alloc];
+                    let vc: *mut AnyObject = msg_send![
+                        vc,
+                        initWithActivityItems: items
+                        applicationActivities: std::ptr::null::<AnyObject>()
+                    ];
+                    // Present from the root view controller stored in IosState.
+                    STATE.with(|s| {
+                        if let Some(state) = s.borrow().as_ref() {
+                            let root_vc: &UIViewController = &state._view_controller;
+                            let _: () = msg_send![
+                                root_vc,
+                                presentViewController: vc
+                                animated: true
+                                completion: std::ptr::null::<AnyObject>()
+                            ];
+                        }
+                    });
                 }
             }
         }

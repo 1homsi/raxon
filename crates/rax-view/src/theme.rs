@@ -176,6 +176,54 @@ impl Default for MotionTokens {
     }
 }
 
+/// A single shadow level with an RGBA color, XY offset, and blur radius.
+#[derive(Clone, Debug)]
+pub struct ShadowToken {
+    /// Shadow color (typically semi-transparent black).
+    pub color: Color,
+    /// Horizontal offset in points (positive = right).
+    pub offset_x: f32,
+    /// Vertical offset in points (positive = down).
+    pub offset_y: f32,
+    /// Gaussian blur radius in points.
+    pub blur: f32,
+}
+
+/// Four elevation levels — `sm`, `md`, `lg`, `xl` — expressed as shadow tokens.
+///
+/// The defaults follow Material Design 3 elevation ramp values using
+/// 20 % black (`#00000033`) as the shadow color.
+///
+/// # Example
+/// ```no_run
+/// let token = theme.shadows.md;
+/// card.shadow(token.color, token.blur, token.offset_x, token.offset_y)
+/// ```
+#[derive(Clone, Debug)]
+pub struct ShadowTokens {
+    /// Elevation 1 — subtle card lift.
+    pub sm: ShadowToken,
+    /// Elevation 3 — raised panels.
+    pub md: ShadowToken,
+    /// Elevation 6 — floating menus / FABs.
+    pub lg: ShadowToken,
+    /// Elevation 12 — modals / bottom sheets.
+    pub xl: ShadowToken,
+}
+
+impl Default for ShadowTokens {
+    fn default() -> Self {
+        // 20 % opaque black — perceptually neutral on both light and dark surfaces.
+        let base = Color::hex(0x00000033);
+        Self {
+            sm: ShadowToken { color: base, offset_x: 0.0, offset_y: 1.0, blur: 2.0 },
+            md: ShadowToken { color: base, offset_x: 0.0, offset_y: 2.0, blur: 6.0 },
+            lg: ShadowToken { color: base, offset_x: 0.0, offset_y: 4.0, blur: 12.0 },
+            xl: ShadowToken { color: base, offset_x: 0.0, offset_y: 8.0, blur: 24.0 },
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Theme aggregate
 // ---------------------------------------------------------------------------
@@ -187,6 +235,7 @@ pub struct Theme {
     pub typography: TypographyTokens,
     pub radius: RadiusTokens,
     pub motion: MotionTokens,
+    pub shadows: ShadowTokens,
 }
 
 impl Theme {
@@ -197,6 +246,7 @@ impl Theme {
             typography: TypographyTokens::default(),
             radius: RadiusTokens::default(),
             motion: MotionTokens::default(),
+            shadows: ShadowTokens::default(),
         }
     }
 
@@ -207,6 +257,7 @@ impl Theme {
             typography: TypographyTokens::default(),
             radius: RadiusTokens::default(),
             motion: MotionTokens::default(),
+            shadows: ShadowTokens::default(),
         }
     }
 }

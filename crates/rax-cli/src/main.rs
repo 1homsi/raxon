@@ -6,6 +6,10 @@
 //!   rax build [--target <ios-sim|ios|android|macos>]
 //!                                         Print the cargo build command to run
 //!   rax run [--target <ios-sim|ios>]      Print the cargo build + Xcode run steps
+//!   rax test [-- <args>]                  Run cargo test, forwarding extra args
+//!   rax lint                              Run cargo clippy --all-targets
+//!   rax fmt [--check]                     Run cargo fmt (or check formatting)
+//!   rax add <crate-name>                  Print the cargo add command for a crate
 //!   rax --version                         Print the rax version
 //!   rax --help                            Print help
 
@@ -41,6 +45,42 @@ fn main() {
             let target = parse_target_flag(&args, "ios-sim");
             run_run(&target);
         }
+        Some("test") => {
+            // Collect everything after an optional "--" separator, or any
+            // trailing args that don't look like rax flags.
+            let extra: Vec<String> = {
+                let mut after_sep = false;
+                let mut out = Vec::new();
+                for arg in args.iter().skip(2) {
+                    if arg == "--" {
+                        after_sep = true;
+                        continue;
+                    }
+                    if after_sep || !arg.starts_with('-') {
+                        out.push(arg.clone());
+                    }
+                }
+                out
+            };
+            cmd_test(&extra);
+        }
+        Some("lint") => {
+            cmd_lint();
+        }
+        Some("fmt") => {
+            let check = args.iter().skip(2).any(|a| a == "--check");
+            cmd_fmt(check);
+        }
+        Some("add") => {
+            let crate_name = match args.get(2) {
+                Some(n) => n.clone(),
+                None => {
+                    eprintln!("Usage: rax add <crate-name>");
+                    process::exit(1);
+                }
+            };
+            cmd_add(&crate_name);
+        }
         Some("--version") | Some("-V") => {
             println!("rax {}", VERSION);
         }
@@ -66,6 +106,10 @@ fn print_help() {
     println!("    doctor                    Print environment diagnostic info");
     println!("    build [--target <TARGET>] Print the build command for a target");
     println!("    run   [--target <TARGET>] Print the run steps for a target");
+    println!("    test  [-- <args>]         Run cargo test, forwarding extra args");
+    println!("    lint                      Run cargo clippy --all-targets");
+    println!("    fmt   [--check]           Run cargo fmt (or --check to only verify)");
+    println!("    add   <crate-name>        Print the cargo add command for a crate");
     println!("    --version                 Print the rax version");
     println!("    --help                    Print this help message");
     println!();
@@ -312,4 +356,65 @@ pub extern "C" fn rax_main() {
     println!("  rax build --target ios-sim");
     println!();
     println!("To build and run on the iOS Simulator, use Xcode or xcodebuild.");
+}
+
+// ---------------------------------------------------------------------------
+// test
+// ---------------------------------------------------------------------------
+
+fn cmd_test(extra_args: &[String]) {
+    println!("Running: cargo test {}", extra_args.join(" "));
+    println!();
+    println!("For iOS integration tests, run on a simulator:");
+    println!("  RUSTC=<path> cargo test --target aarch64-apple-ios-sim");
+    println!();
+    println!("rax includes a built-in test harness via rax-test:");
+    println!("  • Unit tests: use #[test] as normal");
+    println!("  • Widget tests: use rax_test::render() + finders");
+    println!();
+
+    let status = std::process::Command::new("cargo")
+        .arg("test")
+        .args(extra_args)
+        .status()
+        .expect("failed to run cargo test");
+    std::process::exit(status.code().unwrap_or(1));
+}
+
+// ---------------------------------------------------------------------------
+// lint
+// ---------------------------------------------------------------------------
+
+fn cmd_lint() {
+    println!("Running: cargo clippy --all-targets");
+    let status = std::process::Command::new("cargo")
+        .args(["clippy", "--all-targets"])
+        .status()
+        .expect("failed to run cargo clippy");
+    std::process::exit(status.code().unwrap_or(1));
+}
+
+// ---------------------------------------------------------------------------
+// fmt
+// ---------------------------------------------------------------------------
+
+fn cmd_fmt(check: bool) {
+    let args = if check { vec!["fmt", "--check"] } else { vec!["fmt"] };
+    println!("Running: cargo {}", args.join(" "));
+    let status = std::process::Command::new("cargo")
+        .args(&args)
+        .status()
+        .expect("failed to run cargo fmt");
+    std::process::exit(status.code().unwrap_or(1));
+}
+
+// ---------------------------------------------------------------------------
+// add
+// ---------------------------------------------------------------------------
+
+fn cmd_add(crate_name: &str) {
+    println!("To add a dependency:");
+    println!("  cargo add {crate_name}");
+    println!();
+    println!("For rax plugins, check: https://github.com/1homsi/rax");
 }

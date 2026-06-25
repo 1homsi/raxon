@@ -1,0 +1,10 @@
+[package]
+name = "rax-log"
+description = "Structured logging for rax — routes to the platform native log system."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]

@@ -727,4 +727,14 @@ pub enum Mutation {
         /// The system may run the task later than this; it is a minimum, not an exact time.
         earliest_seconds: f64,
     },
+    /// Copy text to the system clipboard (UIPasteboard on iOS).
+    SetClipboard {
+        /// The text to write to the clipboard.
+        text: String,
+    },
+    /// Present the system share sheet (UIActivityViewController on iOS) with the given text.
+    ShareText {
+        /// The text to share.
+        text: String,
+    },
 }

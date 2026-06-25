@@ -255,6 +255,16 @@ impl Tree {
         self.host.emit(Mutation::ScheduleBackgroundTask { identifier, earliest_seconds });
     }
 
+    /// Copies text to the system clipboard.
+    pub fn set_clipboard(&mut self, text: String) {
+        self.host.emit(Mutation::SetClipboard { text });
+    }
+
+    /// Presents the system share sheet with the given text.
+    pub fn share_text(&mut self, text: String) {
+        self.host.emit(Mutation::ShareText { text });
+    }
+
     fn create(&mut self, kind: WidgetKind) -> WidgetId {
         let index = self.nodes.insert(ElementNode {
             kind,

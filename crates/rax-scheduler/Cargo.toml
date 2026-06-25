@@ -1,0 +1,16 @@
+[package]
+name = "rax-scheduler"
+description = "Frame loop, phase ordering, priority task queue, and cross-thread marshaling for rax."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints.rust]
+missing_docs = "warn"
+unsafe_code = "forbid"
+
+[dependencies]
+# std only. The scheduler is platform-agnostic; a real driver (Choreographer /
+# CADisplayLink) calls `run_frame` from outside.

@@ -1,7 +1,9 @@
 //! Flex containers: `column` (vertical) and `row` (horizontal), with layout and
 //! paint modifiers. Children are a [`ViewSequence`] (a tuple).
 
-use rax_core::{AlignItems, Color, EdgeInsets, FlexDirection, LayoutStyle};
+use rax_core::{
+    AlignItems, Color, EdgeInsets, FlexDirection, FlexWrap, JustifyContent, LayoutStyle,
+};
 use rax_dom::{Attribute, Tree, WidgetId};
 
 use crate::view::{View, ViewSequence};
@@ -14,6 +16,8 @@ pub struct Container<C: ViewSequence> {
     gap: f32,
     flex_grow: f32,
     align: AlignItems,
+    justify: JustifyContent,
+    wrap: FlexWrap,
     background: Option<Color>,
     corner_radius: Option<f32>,
 }
@@ -26,6 +30,8 @@ fn container<C: ViewSequence>(direction: FlexDirection, children: C) -> Containe
         gap: 0.0,
         flex_grow: 0.0,
         align: AlignItems::Stretch,
+        justify: JustifyContent::Start,
+        wrap: FlexWrap::NoWrap,
         background: None,
         corner_radius: None,
     }
@@ -84,6 +90,20 @@ impl<C: ViewSequence> Container<C> {
         self
     }
 
+    /// Sets main-axis distribution of children.
+    #[must_use]
+    pub fn justify(mut self, justify: JustifyContent) -> Self {
+        self.justify = justify;
+        self
+    }
+
+    /// Enables wrapping of children onto multiple lines.
+    #[must_use]
+    pub fn wrap(mut self) -> Self {
+        self.wrap = FlexWrap::Wrap;
+        self
+    }
+
     /// Background fill color.
     #[must_use]
     pub fn background(mut self, color: Color) -> Self {
@@ -107,6 +127,8 @@ impl<C: ViewSequence> View for Container<C> {
             LayoutStyle {
                 direction: self.direction,
                 align_items: self.align,
+                justify_content: self.justify,
+                wrap: self.wrap,
                 padding: self.padding,
                 gap: self.gap,
                 flex_grow: self.flex_grow,

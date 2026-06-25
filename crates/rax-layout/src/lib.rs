@@ -111,41 +111,90 @@ fn build_node(
 
 /// Maps our neutral style onto taffy's flex style.
 fn to_taffy_style(style: LayoutStyle) -> Style {
-    use rax_core::AlignItems as A;
     Style {
         display: Display::Flex,
+        position: match style.position {
+            rax_core::Position::Relative => taffy::Position::Relative,
+            rax_core::Position::Absolute => taffy::Position::Absolute,
+        },
         flex_direction: match style.direction {
             FlexDirection::Row => taffy::FlexDirection::Row,
             FlexDirection::Column => taffy::FlexDirection::Column,
         },
-        align_items: Some(match style.align_items {
-            A::Stretch => taffy::AlignItems::Stretch,
-            A::Start => taffy::AlignItems::FlexStart,
-            A::Center => taffy::AlignItems::Center,
-            A::End => taffy::AlignItems::FlexEnd,
-        }),
-        padding: taffy::Rect {
-            left: length(style.padding.left),
-            right: length(style.padding.right),
-            top: length(style.padding.top),
-            bottom: length(style.padding.bottom),
+        flex_wrap: match style.wrap {
+            rax_core::FlexWrap::NoWrap => taffy::FlexWrap::NoWrap,
+            rax_core::FlexWrap::Wrap => taffy::FlexWrap::Wrap,
+            rax_core::FlexWrap::WrapReverse => taffy::FlexWrap::WrapReverse,
         },
+        align_items: Some(to_align(style.align_items)),
+        align_self: style.align_self.map(to_align),
+        justify_content: Some(to_justify(style.justify_content)),
+        padding: to_lp_rect(style.padding),
         margin: taffy::Rect {
             left: length(style.margin.left),
             right: length(style.margin.right),
             top: length(style.margin.top),
             bottom: length(style.margin.bottom),
         },
+        inset: taffy::Rect {
+            left: length(style.inset.left),
+            right: length(style.inset.right),
+            top: length(style.inset.top),
+            bottom: length(style.inset.bottom),
+        },
         gap: taffy::Size {
             width: length(style.gap),
             height: length(style.gap),
         },
         flex_grow: style.flex_grow,
+        flex_shrink: style.flex_shrink,
+        flex_basis: to_dim(style.flex_basis),
         size: taffy::Size {
             width: to_dim(style.width),
             height: to_dim(style.height),
         },
+        min_size: taffy::Size {
+            width: to_dim(style.min_width),
+            height: to_dim(style.min_height),
+        },
+        max_size: taffy::Size {
+            width: to_dim(style.max_width),
+            height: to_dim(style.max_height),
+        },
+        aspect_ratio: style.aspect_ratio,
         ..Style::DEFAULT
+    }
+}
+
+fn to_align(a: rax_core::AlignItems) -> taffy::AlignItems {
+    use rax_core::AlignItems as A;
+    match a {
+        A::Stretch => taffy::AlignItems::Stretch,
+        A::Start => taffy::AlignItems::FlexStart,
+        A::Center => taffy::AlignItems::Center,
+        A::End => taffy::AlignItems::FlexEnd,
+        A::Baseline => taffy::AlignItems::Baseline,
+    }
+}
+
+fn to_justify(j: rax_core::JustifyContent) -> taffy::JustifyContent {
+    use rax_core::JustifyContent as J;
+    match j {
+        J::Start => taffy::JustifyContent::FlexStart,
+        J::Center => taffy::JustifyContent::Center,
+        J::End => taffy::JustifyContent::FlexEnd,
+        J::SpaceBetween => taffy::JustifyContent::SpaceBetween,
+        J::SpaceAround => taffy::JustifyContent::SpaceAround,
+        J::SpaceEvenly => taffy::JustifyContent::SpaceEvenly,
+    }
+}
+
+fn to_lp_rect(e: rax_core::EdgeInsets) -> taffy::Rect<LengthPercentage> {
+    taffy::Rect {
+        left: length(e.left),
+        right: length(e.right),
+        top: length(e.top),
+        bottom: length(e.bottom),
     }
 }
 
@@ -153,6 +202,7 @@ fn to_dim(d: rax_core::Dimension) -> Dimension {
     match d {
         rax_core::Dimension::Auto => auto(),
         rax_core::Dimension::Points(p) => length(p),
+        rax_core::Dimension::Percent(p) => percent(p / 100.0),
     }
 }
 

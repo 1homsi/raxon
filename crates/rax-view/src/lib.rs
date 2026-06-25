@@ -36,6 +36,7 @@
 mod button;
 mod container;
 mod dynamic;
+mod modifier;
 mod spacer;
 mod text;
 mod view;
@@ -43,12 +44,13 @@ mod view;
 pub use button::{button, Button};
 pub use container::{column, row, Container};
 pub use dynamic::{dynamic, Dynamic};
+pub use modifier::{Styled, ViewExt};
 pub use spacer::{spacer, Spacer};
 pub use text::{text, DynamicText, IntoText, StaticText, Text};
 pub use view::{boxed, BoxedView, View, ViewSequence};
 
-// Re-export the alignment enum used by `Container::align` for convenience.
-pub use rax_core::AlignItems;
+// Re-export the style enums used by the builder API for convenience.
+pub use rax_core::{AlignItems, Dimension, EdgeInsets, FlexWrap, JustifyContent, Position};
 
 use rax_dom::{Tree, WidgetId};
 

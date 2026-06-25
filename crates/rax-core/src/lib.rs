@@ -20,4 +20,6 @@ pub mod style;
 pub use arena::{Arena, Index};
 pub use color::Color;
 pub use geometry::{EdgeInsets, Point, Rect, Size};
-pub use style::{AlignItems, Dimension, FlexDirection, LayoutStyle};
+pub use style::{
+    AlignItems, Dimension, FlexDirection, FlexWrap, JustifyContent, LayoutStyle, Position,
+};

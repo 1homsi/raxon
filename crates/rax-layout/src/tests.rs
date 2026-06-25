@@ -55,6 +55,95 @@ fn column_stacks_children_with_padding_and_gap() {
 }
 
 #[test]
+fn justify_space_between_pushes_children_to_edges() {
+    let mut tree = Tree::new(Host::new(RecordingBackend::new()));
+    let root = tree.create_view();
+    tree.set_style(
+        root,
+        LayoutStyle {
+            direction: FlexDirection::Row,
+            justify_content: rax_core::JustifyContent::SpaceBetween,
+            ..LayoutStyle::default()
+        },
+    );
+    let a = tree.create_button();
+    let b = tree.create_button();
+    tree.append(root, a);
+    tree.append(root, b);
+
+    let frames = compute(&tree, root, Size::new(300.0, 80.0));
+    let fa = frame_of(&frames, a);
+    let fb = frame_of(&frames, b);
+    assert_eq!(fa.origin.x, 0.0, "first child flush left");
+    assert!(
+        fb.max_x() >= 299.0,
+        "last child flush right: {}",
+        fb.max_x()
+    );
+}
+
+#[test]
+fn max_width_constrains_size() {
+    let mut tree = Tree::new(Host::new(RecordingBackend::new()));
+    let root = tree.create_view();
+    tree.set_style(
+        root,
+        LayoutStyle {
+            direction: FlexDirection::Column,
+            ..LayoutStyle::default()
+        },
+    );
+    let child = tree.create_view();
+    tree.set_style(
+        child,
+        LayoutStyle {
+            width: rax_core::Dimension::Points(1000.0),
+            max_width: rax_core::Dimension::Points(120.0),
+            height: rax_core::Dimension::Points(10.0),
+            ..LayoutStyle::default()
+        },
+    );
+    tree.append(root, child);
+
+    let frames = compute(&tree, root, Size::new(300.0, 300.0));
+    assert!(
+        (frame_of(&frames, child).size.width - 120.0).abs() < 0.5,
+        "clamped to max_width"
+    );
+}
+
+#[test]
+fn absolute_position_uses_inset() {
+    let mut tree = Tree::new(Host::new(RecordingBackend::new()));
+    let root = tree.create_view();
+    tree.set_style(root, LayoutStyle::default());
+    let child = tree.create_view();
+    tree.set_style(
+        child,
+        LayoutStyle {
+            position: rax_core::Position::Absolute,
+            inset: EdgeInsets {
+                top: 25.0,
+                left: 40.0,
+                right: 0.0,
+                bottom: 0.0,
+            },
+            width: rax_core::Dimension::Points(50.0),
+            height: rax_core::Dimension::Points(50.0),
+            ..LayoutStyle::default()
+        },
+    );
+    tree.append(root, child);
+
+    let frames = compute(&tree, root, Size::new(300.0, 300.0));
+    assert_eq!(
+        frame_of(&frames, child).origin,
+        rax_core::Point::new(40.0, 25.0),
+        "positioned by inset"
+    );
+}
+
+#[test]
 fn row_lays_children_horizontally() {
     let mut tree = Tree::new(Host::new(RecordingBackend::new()));
     let root = tree.create_view();

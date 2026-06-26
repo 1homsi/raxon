@@ -1,11 +1,14 @@
 [package]
 name = "raxon"
-description = "The rax framework facade: one dependency and a prelude for building rax apps."
+description = "A reactive, signal-driven native UI framework for Rust — iOS today, Android and more coming."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-repository.workspace = true
+repository = "https://github.com/1homsi/raxon"
+homepage = "https://github.com/1homsi/raxon"
+keywords = ["ui", "native", "ios", "reactive", "mobile"]
+categories = ["gui", "os::macos-apis"]
 
 [lints.rust]
 missing_docs = "warn"
@@ -16,22 +19,22 @@ default = []
 testing = ["dep:raxon-test"]
 
 [dependencies]
-raxon-core = { path = "../raxon-core" }
-raxon-reactive = { path = "../raxon-reactive" }
-raxon-view = { path = "../raxon-view" }
-raxon-runtime = { path = "../raxon-runtime" }
-raxon-nav = { path = "../raxon-nav" }
-raxon-store = { path = "../raxon-store" }
-raxon-net = { path = "../raxon-net" }
-raxon-anim = { path = "../raxon-anim" }
-raxon-async = { path = "../raxon-async" }
-raxon-intl = { path = "../raxon-intl" }
-raxon-style = { path = "../raxon-style" }
-raxon-plugin = { path = "../raxon-plugin" }
-raxon-keychain = { path = "../raxon-keychain" }
-raxon-test = { path = "../raxon-test", optional = true }
+raxon-core = { path = "../raxon-core", version = "0.0.1" }
+raxon-reactive = { path = "../raxon-reactive", version = "0.0.1" }
+raxon-view = { path = "../raxon-view", version = "0.0.1" }
+raxon-runtime = { path = "../raxon-runtime", version = "0.0.1" }
+raxon-nav = { path = "../raxon-nav", version = "0.0.1" }
+raxon-store = { path = "../raxon-store", version = "0.0.1" }
+raxon-net = { path = "../raxon-net", version = "0.0.1" }
+raxon-anim = { path = "../raxon-anim", version = "0.0.1" }
+raxon-async = { path = "../raxon-async", version = "0.0.1" }
+raxon-intl = { path = "../raxon-intl", version = "0.0.1" }
+raxon-style = { path = "../raxon-style", version = "0.0.1" }
+raxon-plugin = { path = "../raxon-plugin", version = "0.0.1" }
+raxon-keychain = { path = "../raxon-keychain", version = "0.0.1" }
+raxon-test = { path = "../raxon-test", version = "0.0.1", optional = true }
 
-# The iOS backend only exists on Apple mobile targets; gate it so `rax` builds
+# The iOS backend only exists on Apple mobile targets; gate it so raxon builds
 # everywhere (host tests, future desktop/web) without dragging in UIKit.
 [target.'cfg(target_os = "ios")'.dependencies]
-raxon-ios = { path = "../raxon-ios" }
+raxon-ios = { path = "../raxon-ios", version = "0.0.1" }

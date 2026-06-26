@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "raxon-store"
 description = "Pluggable key-value storage and reactive persisted signals for rax."
 version.workspace = true

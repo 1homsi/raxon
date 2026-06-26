@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "raxon-sqlite"
 description = "SQLite storage for rax apps, backed by rusqlite with a bundled SQLite."
 version.workspace = true

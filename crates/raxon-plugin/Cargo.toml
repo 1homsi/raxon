@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "raxon-plugin"
 description = "Plugin system for rax native modules."
 version.workspace = true

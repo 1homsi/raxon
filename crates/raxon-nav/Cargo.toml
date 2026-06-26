@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "raxon-nav"
 description = "Stack navigation for rax: a signal-backed route stack and a routes view."
 version.workspace = true

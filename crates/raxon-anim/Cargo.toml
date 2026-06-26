@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "raxon-anim"
 description = "Animation engine for rax: tweened animated signals driven by the frame loop."
 version.workspace = true

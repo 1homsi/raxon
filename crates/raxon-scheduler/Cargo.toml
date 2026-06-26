@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "raxon-scheduler"
 description = "Frame loop, phase ordering, priority task queue, and cross-thread marshaling for rax."
 version.workspace = true

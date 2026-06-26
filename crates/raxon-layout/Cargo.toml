@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "raxon-layout"
 description = "Flexbox layout for rax, wrapping taffy behind the engine's neutral LayoutStyle."
 version.workspace = true

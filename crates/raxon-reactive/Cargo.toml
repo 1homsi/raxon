@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "raxon-reactive"
 description = "Fine-grained reactive runtime (signals, memos, effects) for the rax UI framework."
 version.workspace = true

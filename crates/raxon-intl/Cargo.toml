@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "raxon-intl"
 description = "Internationalization for rax: a reactive, runtime-switchable message catalog."
 version.workspace = true

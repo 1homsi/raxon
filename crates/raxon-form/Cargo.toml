@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "raxon-form"
 description = "Form validation helpers for rax."
 version.workspace = true

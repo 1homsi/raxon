@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "raxon-view"
 description = "Declarative, macro-free typed view builder for rax. Lowers to the rax-dom element tree."
 version.workspace = true

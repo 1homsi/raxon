@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "raxon-runtime"
 description = "App driver for rax: mounts a view, runs layout, drains events, and drives frames."
 version.workspace = true

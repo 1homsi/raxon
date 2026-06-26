@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "raxon-ios"
 description = "iOS (UIKit) backend for rax, implemented in pure Rust via objc2."
 version.workspace = true

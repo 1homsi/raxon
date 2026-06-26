@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "raxon-log"
 description = "Structured logging for rax — routes to the platform native log system."
 version.workspace = true

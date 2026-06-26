@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "raxon-core"
 description = "Core, dependency-free data structures for the rax UI framework: geometry, ids, and a generational arena."
 version.workspace = true

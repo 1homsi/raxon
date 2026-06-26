@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "raxon-async"
 description = "UI-thread async executor and async-aware Resource for the rax framework."
 version.workspace = true

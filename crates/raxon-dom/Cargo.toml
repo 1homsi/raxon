@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "raxon-dom"
 description = "Retained element tree, widget/mutation model, and render backend seam for rax."
 version.workspace = true

@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "raxon-test"
 description = "Headless test harness and finder/query API for rax apps (no platform needed)."
 version.workspace = true

@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "raxon-net"
 description = "HTTP client abstraction for rax, returning reactive Resources."
 version.workspace = true

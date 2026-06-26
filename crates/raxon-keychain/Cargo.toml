@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "raxon-keychain"
 description = "Secure key-value storage for rax apps (in-memory with iOS Keychain path)."
 version.workspace = true

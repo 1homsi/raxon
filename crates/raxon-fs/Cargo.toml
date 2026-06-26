@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "raxon-fs"
 description = "Filesystem helpers for rax apps."
 version.workspace = true

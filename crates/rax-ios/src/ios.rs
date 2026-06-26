@@ -2290,6 +2290,27 @@ impl Backend for UiKitBackend {
                             let _: () = msg_send![layer, setZPosition: z as f64];
                         }
                     }
+                    Attribute::FlexOrder(_) => {
+                        // Flex order is handled by the layout engine; no native view property needed.
+                    }
+                    Attribute::UserSelectText(selectable) => {
+                        unsafe {
+                            let _: () = msg_send![&*view, setUserInteractionEnabled: selectable];
+                        }
+                    }
+                    Attribute::ParagraphSpacing(spacing) => {
+                        // TODO: apply NSParagraphStyle paragraphSpacing to UILabel/UITextView
+                        let _ = spacing;
+                    }
+                    Attribute::FontStyle(style) => {
+                        use rax_dom::FontStyle;
+                        match style {
+                            FontStyle::Italic | FontStyle::Oblique => {
+                                // TODO: derive italic font from current font; for now no-op
+                            }
+                            FontStyle::Normal => {}
+                        }
+                    }
                 }
             }
             Mutation::SetFrame { id, rect } => {

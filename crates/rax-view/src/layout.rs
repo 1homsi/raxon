@@ -12,6 +12,8 @@
 //! All helpers are built from the existing [`ViewExt`] modifier API, so they
 //! compose freely with every other modifier in the crate.
 
+use std::cell::RefCell;
+
 use rax_core::{AlignItems, JustifyContent};
 use rax_reactive::{create_memo, create_signal, Memo, Signal};
 
@@ -19,6 +21,73 @@ use crate::container::column;
 use crate::modifier::ViewExt;
 use crate::spacer::spacer;
 use crate::view::View;
+
+// ---------------------------------------------------------------------------
+// RTL-aware layout direction
+// ---------------------------------------------------------------------------
+
+/// The logical layout direction for the application (or a subtree).
+///
+/// This is an app-level signal; changing it causes every reactive consumer
+/// (dynamic views, direction modifiers) to re-evaluate. Typically set once at
+/// startup based on the device locale, and updated whenever the locale changes
+/// (e.g. via rax-i18n's locale signal).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum LayoutDirection {
+    /// Left-to-right layout (the default for most locales).
+    #[default]
+    Ltr,
+    /// Right-to-left layout (Arabic, Hebrew, Persian, …).
+    Rtl,
+}
+
+thread_local! {
+    static LAYOUT_DIRECTION: RefCell<Option<Signal<LayoutDirection>>> =
+        RefCell::new(None);
+}
+
+/// Returns the app-wide reactive [`Signal<LayoutDirection>`].
+///
+/// The signal is created on first call and shared across all callers on the
+/// same thread. Start as [`LayoutDirection::Ltr`]; call
+/// [`update_layout_direction`] to change it.
+///
+/// # Example
+/// ```rust
+/// use rax_view::layout::{use_layout_direction, LayoutDirection};
+///
+/// let dir = use_layout_direction();
+/// // Inside a dynamic() closure:
+/// // if dir.get() == LayoutDirection::Rtl { … }
+/// ```
+pub fn use_layout_direction() -> Signal<LayoutDirection> {
+    LAYOUT_DIRECTION.with(|cell| {
+        let mut borrow = cell.borrow_mut();
+        if let Some(sig) = *borrow {
+            return sig;
+        }
+        let sig = create_signal(LayoutDirection::default());
+        *borrow = Some(sig);
+        sig
+    })
+}
+
+/// Sets the app-wide layout direction signal.
+///
+/// Call this from your i18n/locale layer when the locale changes (e.g. via
+/// rax-i18n's locale signal effect), or once at startup for a fixed-locale app.
+///
+/// # Example (platform bootstrap)
+/// ```rust
+/// use rax_view::layout::{update_layout_direction, LayoutDirection};
+///
+/// // Detected Arabic locale → RTL.
+/// update_layout_direction(LayoutDirection::Rtl);
+/// ```
+pub fn update_layout_direction(dir: LayoutDirection) {
+    let sig = use_layout_direction();
+    sig.set(dir);
+}
 
 // ---------------------------------------------------------------------------
 // Expanded / Flexible

@@ -487,6 +487,18 @@ pub enum Attribute {
     /// Enforce a fixed width-to-height aspect ratio on this view.
     /// Maps to an `NSLayoutConstraint` aspect-ratio constraint on iOS.
     AspectRatio(f32),
+    /// Flex order (CSS `order`). Lower values render/lay-out first.
+    /// Maps to `UIStackView` ordering or manual sort in the backend.
+    FlexOrder(i32),
+    /// Whether the text in this label is user-selectable (copy/select).
+    /// On iOS, enabling requires a `UITextView` swap — set as a hint for now.
+    UserSelectText(bool),
+    /// Paragraph spacing in points added after each paragraph break.
+    /// Maps to `NSParagraphStyle.paragraphSpacing` on iOS.
+    ParagraphSpacing(f32),
+    /// Italic / oblique style for a text label.
+    /// Maps to `UIFont.italicSystemFont` or a slanted variant on iOS.
+    FontStyle(FontStyle),
 }
 
 /// The visual style of the iOS status bar.
@@ -511,6 +523,18 @@ pub enum TextDecoration {
     Strikethrough,
     /// Double underline.
     UnderlineDouble,
+}
+
+/// The italic/oblique style of a font.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FontStyle {
+    /// Upright (roman) text — the default.
+    #[default]
+    Normal,
+    /// Italic text (UIFont italic system font or a named italic variant).
+    Italic,
+    /// Oblique text (slanted without a true italic variant; falls back to italic on iOS).
+    Oblique,
 }
 
 /// A semantic text style that scales with the user's preferred reading size

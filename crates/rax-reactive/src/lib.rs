@@ -59,6 +59,10 @@ pub use effect::{create_effect, Effect};
 pub use handle::{create_memo, create_signal, Memo, Signal};
 pub use history::{use_history, History};
 pub use middleware::{add_signal_middleware, clear_signal_middlewares};
-pub use persisted::{kv_get, kv_set, persisted_bool, persisted_f64, persisted_i64, persisted_signal};
+pub use persisted::{
+    kv_get, kv_set, kv_set_reactive, kv_delete_reactive, watch_kv,
+    persisted_bool, persisted_f64, persisted_i64, persisted_signal,
+    KvNamespace,
+};
 pub use runtime::{create_root, Runtime, Scope};
 pub use store::Store;

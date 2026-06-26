@@ -91,7 +91,8 @@ pub use registry::{
 pub use view::{boxed, BoxedView, View, ViewSequence};
 pub use layout::{
     aspect_ratio, center, expanded, flexible, responsive, safe_area_bottom, safe_area_top,
-    safe_area_view, update_window_size, use_orientation, use_size_class, use_window_width,
+    safe_area_view, update_layout_direction, update_window_size, use_layout_direction,
+    use_orientation, use_size_class, use_window_width, LayoutDirection as AppLayoutDirection,
     Orientation, SizeClass,
 };
 

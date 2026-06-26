@@ -115,6 +115,9 @@ pub struct Text<M, T: IntoText<M>> {
     line_height: Option<f32>,
     text_decoration: Option<rax_dom::TextDecoration>,
     text_shadow: Option<(Color, f32, f32, f32)>,
+    font_style: Option<rax_dom::FontStyle>,
+    selectable: Option<bool>,
+    paragraph_spacing: Option<f32>,
     _marker: PhantomData<fn() -> M>,
 }
 
@@ -134,6 +137,9 @@ pub fn text<M, T: IntoText<M>>(value: T) -> Text<M, T> {
         line_height: None,
         text_decoration: None,
         text_shadow: None,
+        font_style: None,
+        selectable: None,
+        paragraph_spacing: None,
         _marker: PhantomData,
     }
 }
@@ -242,6 +248,38 @@ impl<M, T: IntoText<M>> Text<M, T> {
         self.text_shadow = Some((color, offset_x, offset_y, blur));
         self
     }
+
+    /// Sets the font style (normal, italic, or oblique).
+    ///
+    /// On iOS, italic maps to `UIFont.italicSystemFont(ofSize:)` or a named
+    /// italic variant; oblique falls back to italic.
+    #[must_use]
+    pub fn font_style(mut self, style: rax_dom::FontStyle) -> Self {
+        self.font_style = Some(style);
+        self
+    }
+
+    /// Controls whether this text label's content is user-selectable
+    /// (copy / selection handles).
+    ///
+    /// On iOS, `true` is a hint to the backend to use `UITextView` instead of
+    /// `UILabel`, which supports selection. `false` (the default) uses `UILabel`.
+    #[must_use]
+    pub fn selectable(mut self, enabled: bool) -> Self {
+        self.selectable = Some(enabled);
+        self
+    }
+
+    /// Sets paragraph spacing in points — extra vertical space added after
+    /// each paragraph break (`\n`).
+    ///
+    /// Maps to `NSParagraphStyle.paragraphSpacing` on iOS via
+    /// `NSMutableParagraphStyle`.
+    #[must_use]
+    pub fn paragraph_spacing(mut self, spacing: f32) -> Self {
+        self.paragraph_spacing = Some(spacing);
+        self
+    }
 }
 
 impl<M, T: IntoText<M>> View for Text<M, T> {
@@ -283,6 +321,15 @@ impl<M, T: IntoText<M>> View for Text<M, T> {
         }
         if let Some((color, offset_x, offset_y, blur)) = self.text_shadow {
             tree.set(id, Attribute::TextShadow { color, offset_x, offset_y, blur });
+        }
+        if let Some(style) = self.font_style {
+            tree.set(id, Attribute::FontStyle(style));
+        }
+        if let Some(enabled) = self.selectable {
+            tree.set(id, Attribute::UserSelectText(enabled));
+        }
+        if let Some(spacing) = self.paragraph_spacing {
+            tree.set(id, Attribute::ParagraphSpacing(spacing));
         }
         self.value.apply(tree, id);
         id

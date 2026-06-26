@@ -167,6 +167,12 @@ pub trait ViewExt: View + Sized {
         self.style_with(move |s| s.aspect_ratio = Some(r))
     }
 
+    /// Flex order (CSS `order`). Lower values are laid out first within
+    /// a flex container. Defaults to `0`.
+    fn order(self, n: i32) -> Decorated<Self, impl FnOnce(&mut Tree, WidgetId)> {
+        self.decorate(move |t, id| t.set(id, Attribute::FlexOrder(n)))
+    }
+
     // --- paint modifiers (emit attributes after build) ---
 
     /// Run an arbitrary decoration after the view builds.

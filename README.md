@@ -40,8 +40,8 @@ Early but functional. A reactive multi-screen app with tab navigation, dynamic l
 | Animation (tweens, springs, keyframes) | ✅ |
 | Networking (HTTP, WebSocket, SSE) | ✅ |
 | SQLite, Keychain, local storage | ✅ |
-| Android backend | 🟡 command backend + driver + binding runtime + host session/registry/versioned bridge + command/event wire |
-| Web/WASM backend | 🟡 DOM command backend + driver + binding runtime + host session/registry/versioned bridge + command/event wire |
+| Android backend | 🟡 command backend + driver + binding runtime + generated host glue + host session/registry/versioned bridge + command/event wire |
+| Web/WASM backend | 🟡 DOM command backend + driver + binding runtime + generated host glue + host session/registry/versioned bridge + command/event wire |
 
 ## Structure
 
@@ -74,6 +74,7 @@ cargo test -p raxon                              # host-side, no platform needed
 cargo check -p raxon --target aarch64-apple-ios-sim
 cargo check -p raxon --target aarch64-linux-android
 cargo check -p raxon --target wasm32-unknown-unknown
+raxon generate --target all                      # Android/Web host glue
 ```
 
 ## License

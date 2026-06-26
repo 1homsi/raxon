@@ -468,6 +468,89 @@ pub fn pop_route() {
     go_back();
 }
 
+// ---------------------------------------------------------------------------
+// Modal presentation stack
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    static MODAL_STACK: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
+}
+
+/// Push a modal route on top of the page stack without affecting the main nav stack.
+pub fn present_modal(route: &str) {
+    MODAL_STACK.with(|s| s.borrow_mut().push(route.to_string()));
+}
+
+/// Dismiss the top-most modal. Returns `false` if there is no modal to dismiss.
+pub fn dismiss_modal() -> bool {
+    MODAL_STACK.with(|s| {
+        let mut stack = s.borrow_mut();
+        if stack.is_empty() { return false; }
+        stack.pop();
+        true
+    })
+}
+
+/// Returns the current top-most modal route, if any modal is presented.
+pub fn current_modal() -> Option<String> {
+    MODAL_STACK.with(|s| s.borrow().last().cloned())
+}
+
+/// Returns the full modal stack (bottom to top).
+pub fn modal_stack() -> Vec<String> {
+    MODAL_STACK.with(|s| s.borrow().clone())
+}
+
+// ---------------------------------------------------------------------------
+// Deep link parsing
+// ---------------------------------------------------------------------------
+
+/// Parse a deep link URL into `(path, query_params)`.
+///
+/// Strips the scheme (e.g. `myapp://`), splits path from query string, and
+/// parses query key/value pairs.
+///
+/// # Example
+/// ```
+/// use rax_nav::parse_deep_link;
+/// let (path, params) = parse_deep_link("myapp://profile/42?tab=posts");
+/// assert_eq!(path, "/profile/42");
+/// assert_eq!(params["tab"], "posts");
+/// ```
+pub fn parse_deep_link(url: &str) -> (String, HashMap<String, String>) {
+    let path_part = if let Some(idx) = url.find("://") {
+        &url[idx + 3..]
+    } else {
+        url
+    };
+    let (raw_path, query) = if let Some(q) = path_part.find('?') {
+        (&path_part[..q], &path_part[q + 1..])
+    } else {
+        (path_part, "")
+    };
+    let path = format!("/{}", raw_path.trim_matches('/'));
+    let params: HashMap<String, String> = query
+        .split('&')
+        .filter(|s| !s.is_empty())
+        .filter_map(|pair| {
+            let mut parts = pair.splitn(2, '=');
+            Some((parts.next()?.to_string(), parts.next().unwrap_or("").to_string()))
+        })
+        .collect();
+    (path, params)
+}
+
+// ---------------------------------------------------------------------------
+// try_navigate — navigate with guard check, returns success bool
+// ---------------------------------------------------------------------------
+
+/// Like [`navigate`] but returns `true` if navigation succeeded and `false` if
+/// a guard redirected it to a different destination.
+pub fn try_navigate(route: &str) -> bool {
+    let actual = navigate(route);
+    actual == route
+}
+
 /// Like [`routes`] but animates screen transitions according to `transition`.
 ///
 /// On each push/pop the incoming screen plays the enter animation; the

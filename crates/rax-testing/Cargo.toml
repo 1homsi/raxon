@@ -1,0 +1,8 @@
+[package]
+name = "rax-testing"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rax-reactive = { path = "../rax-reactive" }
+rax-dom = { path = "../rax-dom" }

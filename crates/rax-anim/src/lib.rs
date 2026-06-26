@@ -963,5 +963,81 @@ where
     opacity
 }
 
+// ---------------------------------------------------------------------------
+// Keyframe animations
+// ---------------------------------------------------------------------------
+
+/// A single keyframe: a value at a normalized position in the timeline.
+pub struct Keyframe<T: Clone> {
+    /// Position in `0.0..=1.0`.
+    pub progress: f32,
+    /// Value at this keyframe.
+    pub value: T,
+    /// Easing from this keyframe to the next.
+    pub easing: Easing,
+}
+
+/// Animate through a sequence of keyframes.
+///
+/// `clock` is a `Signal<f32>` from `0.0` to `1.0`. The returned `Signal<f32>`
+/// holds the interpolated value between surrounding keyframes.
+///
+/// Only `f32` keyframes are supported via this overload. Use [`lerp`] directly
+/// for custom types.
+///
+/// # Panics
+/// Panics if `frames` is empty.
+pub fn keyframes(clock: rax_reactive::Signal<f32>, frames: Vec<Keyframe<f32>>) -> rax_reactive::Signal<f32> {
+    assert!(!frames.is_empty(), "keyframes requires at least one frame");
+    let out = rax_reactive::create_signal(frames[0].value);
+    rax_reactive::create_effect(move || {
+        let t = clock.get().clamp(0.0, 1.0);
+        let n = frames.len();
+        let mut prev = &frames[0];
+        let mut next = &frames[n - 1];
+        for i in 0..n.saturating_sub(1) {
+            if frames[i].progress <= t && t <= frames[i + 1].progress {
+                prev = &frames[i];
+                next = &frames[i + 1];
+                break;
+            }
+        }
+        let span = next.progress - prev.progress;
+        let local_t = if span.abs() < f32::EPSILON { 1.0 } else { (t - prev.progress) / span };
+        let eased = prev.easing.apply(local_t);
+        out.set(lerp(prev.value, next.value, eased));
+    });
+    out
+}
+
+// ---------------------------------------------------------------------------
+// Animation frame clock (frame-counter driven)
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    static ANIM_FRAME: std::cell::Cell<u64> = std::cell::Cell::new(0);
+}
+
+/// Advance the internal animation frame counter. Call once per display frame.
+pub fn tick_animation_frame() {
+    ANIM_FRAME.with(|f| f.set(f.get() + 1));
+}
+
+/// Returns the current animation frame count.
+pub fn animation_frame() -> u64 {
+    ANIM_FRAME.with(|f| f.get())
+}
+
+/// A `Signal<f32>` that cycles `0.0 → 1.0` every `period_frames` frames.
+pub fn use_looping_clock(period_frames: u64) -> rax_reactive::Signal<f32> {
+    let sig = rax_reactive::create_signal(0.0f32);
+    rax_reactive::create_effect(move || {
+        let frame = animation_frame();
+        let v = if period_frames == 0 { 0.0 } else { (frame % period_frames) as f32 / period_frames as f32 };
+        sig.set(v);
+    });
+    sig
+}
+
 #[cfg(test)]
 mod tests;

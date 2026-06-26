@@ -265,6 +265,51 @@ impl Tree {
         self.host.emit(Mutation::ShareText { text });
     }
 
+    /// Posts an accessibility announcement that VoiceOver reads immediately.
+    ///
+    /// Maps to `UIAccessibilityPostNotification(UIAccessibilityAnnouncementNotification, message)`
+    /// on iOS (notification value 1008).
+    pub fn announce_accessibility(&mut self, message: String) {
+        self.host.emit(Mutation::AnnounceAccessibility { message });
+    }
+
+    /// Moves VoiceOver focus to the native view backing `id`.
+    ///
+    /// Maps to `UIAccessibilityPostNotification(UIAccessibilityScreenChangedNotification, view)`
+    /// on iOS (notification value 1000).
+    pub fn request_focus(&mut self, id: WidgetId) {
+        self.host.emit(Mutation::RequestFocus { id });
+    }
+
+    /// Requests GPS location updates. Results arrive as global `Event::LocationUpdated`.
+    /// iOS: calls `[CLLocationManager startUpdatingLocation]`.
+    pub fn request_location(&mut self) {
+        self.host.emit(Mutation::RequestLocation);
+    }
+
+    /// Stops GPS location updates.
+    pub fn stop_location_updates(&mut self) {
+        self.host.emit(Mutation::StopLocationUpdates);
+    }
+
+    /// Enables or disables the device torch (flashlight).
+    /// iOS: sets `AVCaptureDevice` torch mode.
+    pub fn set_torch(&mut self, on: bool) {
+        self.host.emit(Mutation::SetTorch { on });
+    }
+
+    /// Registers for Apple Push Notification Service (APNS) remote notifications.
+    /// iOS: calls `[UIApplication registerForRemoteNotifications]`.
+    pub fn register_for_push(&mut self) {
+        self.host.emit(Mutation::RegisterForPushNotifications);
+    }
+
+    /// Sets the app badge count on the home screen icon.
+    /// iOS: calls `[[UIApplication sharedApplication] setApplicationIconBadgeNumber: count]`.
+    pub fn set_app_badge(&mut self, count: u32) {
+        self.host.emit(Mutation::SetAppBadge { count });
+    }
+
     fn create(&mut self, kind: WidgetKind) -> WidgetId {
         let index = self.nodes.insert(ElementNode {
             kind,

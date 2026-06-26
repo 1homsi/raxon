@@ -2311,6 +2311,45 @@ impl Backend for UiKitBackend {
                             FontStyle::Normal => {}
                         }
                     }
+                    Attribute::AccessibilityGroup(is_group) => {
+                        // When is_group is true the view is a container, not itself an element.
+                        // isAccessibilityElement = false lets VoiceOver walk the children.
+                        unsafe {
+                            let _: () = msg_send![&*view, setIsAccessibilityElement: !is_group];
+                        }
+                    }
+                    Attribute::AccessibilityHeadingLevel(level) => {
+                        // UIAccessibilityTraitHeader = 0x10000
+                        let header_trait: u64 = 0x10000;
+                        unsafe {
+                            let current_traits: u64 = msg_send![&*view, accessibilityTraits];
+                            let new_traits = if level > 0 {
+                                current_traits | header_trait
+                            } else {
+                                current_traits & !header_trait
+                            };
+                            let _: () = msg_send![&*view, setIsAccessibilityElement: true];
+                            let _: () = msg_send![&*view, setAccessibilityTraits: new_traits];
+                        }
+                    }
+                    Attribute::AccessibilityActions(actions) => {
+                        // TODO: create UIAccessibilityCustomAction objects for each name
+                        // and set them via setAccessibilityCustomActions: on the view.
+                        let _ = actions;
+                    }
+                    Attribute::DynamicType(dt) => {
+                        // adjustsFontForContentSizeCategory scales the font with Dynamic Type.
+                        unsafe {
+                            let _: () = msg_send![&*view, setAdjustsFontForContentSizeCategory: dt];
+                        }
+                    }
+                    Attribute::AccessibilityValueString(value) => {
+                        let ns = NSString::from_str(&value);
+                        unsafe {
+                            let _: () = msg_send![&*view, setIsAccessibilityElement: true];
+                            let _: () = msg_send![&*view, setAccessibilityValue: &*ns];
+                        }
+                    }
                 }
             }
             Mutation::SetFrame { id, rect } => {
@@ -2857,6 +2896,59 @@ impl Backend for UiKitBackend {
                         }
                     });
                 }
+            }
+            Mutation::AnnounceAccessibility { message } => {
+                // UIAccessibilityAnnouncementNotification = 1008
+                // UIAccessibilityPostNotification(notification, argument)
+                // where argument is an NSString for announcements.
+                unsafe {
+                    extern "C" {
+                        fn UIAccessibilityPostNotification(
+                            notification: u32,
+                            argument: *mut AnyObject,
+                        );
+                    }
+                    let ns = NSString::from_str(&message);
+                    UIAccessibilityPostNotification(
+                        1008u32,
+                        &*ns as *const NSString as *mut AnyObject,
+                    );
+                }
+            }
+            Mutation::RequestFocus { id } => {
+                // UIAccessibilityScreenChangedNotification = 1000
+                // Pass the native view as the argument to move VoiceOver focus.
+                if let Some(view) = self.view(id).cloned() {
+                    unsafe {
+                        extern "C" {
+                            fn UIAccessibilityPostNotification(
+                                notification: u32,
+                                argument: *mut AnyObject,
+                            );
+                        }
+                        UIAccessibilityPostNotification(
+                            1000u32,
+                            &*view as *const UIView as *mut AnyObject,
+                        );
+                    }
+                }
+            }
+            Mutation::RequestLocation => {
+                // TODO: call [CLLocationManager startUpdatingLocation]
+            }
+            Mutation::StopLocationUpdates => {
+                // TODO: call [CLLocationManager stopUpdatingLocation]
+            }
+            Mutation::SetTorch { on } => {
+                // TODO: set AVCaptureDevice torch mode
+                let _ = on;
+            }
+            Mutation::RegisterForPushNotifications => {
+                // TODO: call [UIApplication registerForRemoteNotifications]
+            }
+            Mutation::SetAppBadge { count } => {
+                // TODO: set [[UIApplication sharedApplication] applicationIconBadgeNumber]
+                let _ = count;
             }
         }
     }

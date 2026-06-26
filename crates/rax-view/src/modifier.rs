@@ -526,6 +526,66 @@ pub trait ViewExt: View + Sized {
         self.decorate(move |t, id| t.set(id, Attribute::AccessibilityHidden(hidden)))
     }
 
+    /// Groups this view's children into a single accessibility container.
+    ///
+    /// When `is_group` is `true`, the view itself is removed from the
+    /// accessibility tree (`isAccessibilityElement = false`) so VoiceOver
+    /// treats the children as a group rather than individual elements.
+    fn accessibility_group(
+        self,
+        is_group: bool,
+    ) -> Decorated<Self, impl FnOnce(&mut Tree, WidgetId)> {
+        self.decorate(move |t, id| t.set(id, Attribute::AccessibilityGroup(is_group)))
+    }
+
+    /// Marks this element as a heading at the given level (1–6).
+    ///
+    /// Level 0 means no heading. On iOS this adds `UIAccessibilityTraitHeader`
+    /// (bitmask `0x10000`) to the view's accessibility traits when level > 0.
+    fn accessibility_heading(
+        self,
+        level: u8,
+    ) -> Decorated<Self, impl FnOnce(&mut Tree, WidgetId)> {
+        self.decorate(move |t, id| t.set(id, Attribute::AccessibilityHeadingLevel(level)))
+    }
+
+    /// Exposes named custom accessibility actions on this element.
+    ///
+    /// Each string in `actions` maps to a `UIAccessibilityCustomAction` on
+    /// iOS (stub — invoke the action name as a label; handler is a TODO).
+    fn accessibility_actions(
+        self,
+        actions: Vec<&str>,
+    ) -> Decorated<Self, impl FnOnce(&mut Tree, WidgetId)> {
+        let owned: Vec<String> = actions.into_iter().map(|s| s.to_string()).collect();
+        self.decorate(move |t, id| t.set(id, Attribute::AccessibilityActions(owned)))
+    }
+
+    /// Enables Dynamic Type font scaling for this view.
+    ///
+    /// When `dt` is `true`, the view's font automatically adjusts for the
+    /// user's preferred content size category. Maps to
+    /// `adjustsFontForContentSizeCategory = true` on iOS.
+    fn dynamic_type(
+        self,
+        dt: bool,
+    ) -> Decorated<Self, impl FnOnce(&mut Tree, WidgetId)> {
+        self.decorate(move |t, id| t.set(id, Attribute::DynamicType(dt)))
+    }
+
+    /// Sets the accessibility value string for this element.
+    ///
+    /// VoiceOver reads this after the label and hint. Use it for elements
+    /// that display a numeric or text value (e.g. "50%" for a progress bar).
+    /// Maps to `accessibilityValue` on iOS.
+    fn accessibility_value(
+        self,
+        s: impl Into<String>,
+    ) -> Decorated<Self, impl FnOnce(&mut Tree, WidgetId)> {
+        let s = s.into();
+        self.decorate(move |t, id| t.set(id, Attribute::AccessibilityValueString(s)))
+    }
+
     /// Reactively marks this element as selected (e.g. a selected list row,
     /// tab, or chip). Re-applies whenever the signal changes.
     fn accessibility_selected(

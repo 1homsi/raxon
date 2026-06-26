@@ -919,4 +919,25 @@ pub enum Mutation {
         /// The widget to focus.
         id: WidgetId,
     },
+    /// Request GPS location updates. Results arrive via `Event::LocationUpdated`.
+    /// iOS: calls `[CLLocationManager startUpdatingLocation]`.
+    RequestLocation,
+    /// Stop GPS location updates.
+    StopLocationUpdates,
+    /// Enable or disable the device torch (flashlight).
+    /// iOS: sets `AVCaptureDevice` torch mode via `AVCaptureDevice.torchMode`.
+    SetTorch {
+        /// `true` to turn the torch on, `false` to turn it off.
+        on: bool,
+    },
+    /// Register for Apple Push Notification Service (APNS) remote notifications.
+    /// iOS: calls `[UIApplication registerForRemoteNotifications]`.
+    /// The device token arrives via `Event::PushTokenReceived`.
+    RegisterForPushNotifications,
+    /// Set the app badge count shown on the home screen icon.
+    /// iOS: calls `[[UIApplication sharedApplication] setApplicationIconBadgeNumber: count]`.
+    SetAppBadge {
+        /// The badge count to display (0 clears the badge).
+        count: u32,
+    },
 }

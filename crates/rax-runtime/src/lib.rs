@@ -15,7 +15,7 @@ use std::sync::Mutex;
 
 use rax_core::{Color, ColorScheme, EdgeInsets, Rect, Size};
 use rax_dom::{Event, EventKind, EventSink, Host, Tree, WidgetId, WidgetKind};
-use rax_reactive::{create_root, create_signal, provide_context, use_context, Scope, Signal};
+use rax_reactive::{create_memo, create_root, create_signal, provide_context, use_context, Memo, Scope, Signal};
 use rax_view::{mount, View};
 
 
@@ -99,6 +99,47 @@ thread_local! {
     /// [`use_keyboard_height`]; updated by the platform backend via
     /// [`update_keyboard_height`].
     static KEYBOARD_HEIGHT: Cell<Option<Signal<f32>>> = const { Cell::new(None) };
+
+    /// Reactive signal for the device's current GPS location. `None` until the
+    /// first fix arrives (or if location permission is denied). Lazily
+    /// initialised by [`use_location`]; updated by the platform backend via
+    /// [`update_location`].
+    static LOCATION: Cell<Option<Signal<Option<GeoLocation>>>> = const { Cell::new(None) };
+
+    /// Reactive signal for the device's accelerometer readings. `None` when
+    /// the sensor is not running. Lazily initialised by [`use_accelerometer`];
+    /// updated by the platform backend via [`update_accelerometer`].
+    static ACCELEROMETER: Cell<Option<Signal<Option<AccelerometerData>>>> = const { Cell::new(None) };
+
+    /// Reactive signal for the device's gyroscope readings. `None` when the
+    /// sensor is not running. Lazily initialised by [`use_gyroscope`]; updated
+    /// by the platform backend via [`update_gyroscope`].
+    static GYROSCOPE: Cell<Option<Signal<Option<GyroscopeData>>>> = const { Cell::new(None) };
+
+    /// Reactive signal for the APNS push-notification device token. `None`
+    /// until the app successfully registers. Lazily initialised by
+    /// [`use_push_token`]; updated by [`update_push_token`] / cleared by
+    /// [`clear_push_token`].
+    static PUSH_TOKEN: Cell<Option<Signal<Option<String>>>> = const { Cell::new(None) };
+
+    /// Pending torch state queued by [`set_torch`]. `None` means no change;
+    /// `Some(true/false)` is drained by [`App::tick`] and forwarded to the backend.
+    static PENDING_TORCH: std::cell::RefCell<Option<bool>> =
+        const { std::cell::RefCell::new(None) };
+
+    /// Pending app-badge count queued by [`set_app_badge`]. Drained by [`App::tick`].
+    static PENDING_APP_BADGE: std::cell::RefCell<Option<u32>> =
+        const { std::cell::RefCell::new(None) };
+
+    /// Whether `register_for_push` was called since the last tick. Drained by [`App::tick`].
+    static PENDING_PUSH_REGISTRATION: Cell<bool> = const { Cell::new(false) };
+
+    /// Monotonically incrementing frame counter, ticked once per [`App::tick`] call.
+    static FRAME_COUNTER: Cell<u64> = const { Cell::new(0) };
+
+    /// Reactive signal wrapping [`FRAME_COUNTER`], lazily initialised by
+    /// [`use_frame_counter`] and updated on every tick.
+    static FRAME_COUNTER_SIGNAL: Cell<Option<Signal<u64>>> = const { Cell::new(None) };
 }
 
 // ---------------------------------------------------------------------------
@@ -229,6 +270,204 @@ pub enum NetworkStatus {
     WiFi,
     /// Connected via cellular (mobile data).
     Cellular,
+}
+
+/// GPS location fix reported by the platform backend.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GeoLocation {
+    /// Latitude in degrees (positive = north).
+    pub latitude: f64,
+    /// Longitude in degrees (positive = east).
+    pub longitude: f64,
+    /// Altitude in metres above sea level.
+    pub altitude: f64,
+    /// Horizontal accuracy in metres (lower is better).
+    pub accuracy: f64,
+    /// Current speed in metres per second (`-1` when unavailable).
+    pub speed: f64,
+}
+
+/// Raw accelerometer reading (in g-force units).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AccelerometerData {
+    /// Acceleration along the X axis.
+    pub x: f64,
+    /// Acceleration along the Y axis.
+    pub y: f64,
+    /// Acceleration along the Z axis.
+    pub z: f64,
+}
+
+/// Raw gyroscope reading (in radians per second).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GyroscopeData {
+    /// Rotation rate around the X axis.
+    pub x: f64,
+    /// Rotation rate around the Y axis.
+    pub y: f64,
+    /// Rotation rate around the Z axis.
+    pub z: f64,
+}
+
+/// Returns a reactive `Signal<Option<GeoLocation>>` that holds the most
+/// recent GPS fix from the device. The value is `None` until the first
+/// location arrives or if permission is denied.
+///
+/// Call [`start_location`] to begin receiving updates.
+///
+/// Must be called while building views under a running [`App`].
+pub fn use_location() -> Signal<Option<GeoLocation>> {
+    LOCATION.with(|slot| {
+        if let Some(sig) = slot.get() {
+            return sig;
+        }
+        let sig = create_signal(None);
+        slot.set(Some(sig));
+        sig
+    })
+}
+
+/// Called by the platform backend to push a new GPS fix into the reactive
+/// signal exposed by [`use_location`]. App code should not call this directly.
+pub fn update_location(loc: GeoLocation) {
+    LOCATION.with(|slot| {
+        if let Some(sig) = slot.get() {
+            sig.set(Some(loc));
+        }
+    });
+}
+
+/// Returns a reactive `Signal<Option<AccelerometerData>>` that holds the
+/// most recent accelerometer reading. `None` until motion updates are started
+/// via [`start_motion`].
+///
+/// Must be called while building views under a running [`App`].
+pub fn use_accelerometer() -> Signal<Option<AccelerometerData>> {
+    ACCELEROMETER.with(|slot| {
+        if let Some(sig) = slot.get() {
+            return sig;
+        }
+        let sig = create_signal(None);
+        slot.set(Some(sig));
+        sig
+    })
+}
+
+/// Called by the platform backend to push a new accelerometer reading into
+/// the reactive signal exposed by [`use_accelerometer`]. App code should not
+/// call this directly.
+pub fn update_accelerometer(data: AccelerometerData) {
+    ACCELEROMETER.with(|slot| {
+        if let Some(sig) = slot.get() {
+            sig.set(Some(data));
+        }
+    });
+}
+
+/// Returns a reactive `Signal<Option<GyroscopeData>>` that holds the most
+/// recent gyroscope reading. `None` until motion updates are started via
+/// [`start_motion`].
+///
+/// Must be called while building views under a running [`App`].
+pub fn use_gyroscope() -> Signal<Option<GyroscopeData>> {
+    GYROSCOPE.with(|slot| {
+        if let Some(sig) = slot.get() {
+            return sig;
+        }
+        let sig = create_signal(None);
+        slot.set(Some(sig));
+        sig
+    })
+}
+
+/// Called by the platform backend to push a new gyroscope reading into the
+/// reactive signal exposed by [`use_gyroscope`]. App code should not call
+/// this directly.
+pub fn update_gyroscope(data: GyroscopeData) {
+    GYROSCOPE.with(|slot| {
+        if let Some(sig) = slot.get() {
+            sig.set(Some(data));
+        }
+    });
+}
+
+/// Enables or disables the device flashlight (torch). Applied on the next
+/// frame tick so it is safe to call from within reactive closures or event handlers.
+///
+/// ```no_run
+/// use rax_runtime::set_torch;
+///
+/// set_torch(true); // torch on
+/// set_torch(false); // torch off
+/// ```
+pub fn set_torch(on: bool) {
+    PENDING_TORCH.with(|q| *q.borrow_mut() = Some(on));
+}
+
+/// Returns a reactive `Signal<Option<String>>` that holds the APNS device
+/// push token (hex-encoded). `None` until the app registers and the OS
+/// delivers a token.
+///
+/// Call [`register_for_push`] to request registration.
+///
+/// Must be called while building views under a running [`App`].
+pub fn use_push_token() -> Signal<Option<String>> {
+    PUSH_TOKEN.with(|slot| {
+        if let Some(sig) = slot.get() {
+            return sig;
+        }
+        let sig = create_signal(None);
+        slot.set(Some(sig));
+        sig
+    })
+}
+
+/// Called by the platform backend when the OS delivers an APNS token.
+/// App code should not call this directly.
+pub fn update_push_token(token: String) {
+    PUSH_TOKEN.with(|slot| {
+        if let Some(sig) = slot.get() {
+            sig.set(Some(token));
+        }
+    });
+}
+
+/// Clears the push token reactive signal (e.g. after the app unregisters
+/// from remote notifications).
+pub fn clear_push_token() {
+    PUSH_TOKEN.with(|slot| {
+        if let Some(sig) = slot.get() {
+            sig.set(None);
+        }
+    });
+}
+
+/// Registers this app for Apple Push Notification Service (APNS) remote
+/// notifications. On success the OS delivers a device token, which is pushed
+/// into the signal returned by [`use_push_token`].
+///
+/// The registration request is applied on the next frame tick.
+///
+/// ```no_run
+/// use rax_runtime::register_for_push;
+///
+/// register_for_push();
+/// ```
+pub fn register_for_push() {
+    PENDING_PUSH_REGISTRATION.with(|c| c.set(true));
+}
+
+/// Sets the numeric badge on the app's home-screen icon. Pass `0` to clear
+/// the badge. Applied on the next frame tick.
+///
+/// ```no_run
+/// use rax_runtime::set_app_badge;
+///
+/// set_app_badge(3); // show "3"
+/// set_app_badge(0); // clear badge
+/// ```
+pub fn set_app_badge(count: u32) {
+    PENDING_APP_BADGE.with(|q| *q.borrow_mut() = Some(count));
 }
 
 /// Copy `text` to the system clipboard. The write is applied on the next frame
@@ -759,6 +998,18 @@ impl App {
     pub fn tick(&mut self) {
         rax_async::run_until_stalled(); // advance async tasks (may resolve resources)
 
+        // Increment the global frame counter and push it into the reactive signal.
+        let new_frame = FRAME_COUNTER.with(|c| {
+            let n = c.get().wrapping_add(1);
+            c.set(n);
+            n
+        });
+        FRAME_COUNTER_SIGNAL.with(|slot| {
+            if let Some(sig) = slot.get() {
+                sig.set(new_frame);
+            }
+        });
+
         // Advance animations by the wall-clock delta since the last frame.
         let now = std::time::Instant::now();
         let dt = self
@@ -870,6 +1121,21 @@ impl App {
             self.tree.share_text(text);
         }
 
+        // Drain torch state queued by set_torch().
+        if let Some(on) = PENDING_TORCH.with(|q| q.borrow_mut().take()) {
+            self.tree.set_torch(on);
+        }
+
+        // Drain push-notification registration requests.
+        if PENDING_PUSH_REGISTRATION.with(|c| c.replace(false)) {
+            self.tree.register_for_push();
+        }
+
+        // Drain app-badge updates queued by set_app_badge().
+        if let Some(count) = PENDING_APP_BADGE.with(|q| q.borrow_mut().take()) {
+            self.tree.set_app_badge(count);
+        }
+
         self.tree.run_dynamic(); // events/async/anim may have dirtied dynamic subtrees
         self.relayout();
     }
@@ -918,6 +1184,134 @@ impl App {
 /// ```
 pub fn rax_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
+}
+
+// ---------------------------------------------------------------------------
+// Frame counter — timing utilities
+// ---------------------------------------------------------------------------
+
+/// Returns the raw (non-reactive) frame count since the app started.
+///
+/// Incremented once per [`App::tick`]. Useful for non-reactive timing logic,
+/// e.g. throttling work to every N frames inside an effect.
+///
+/// ```no_run
+/// use rax_runtime::current_frame;
+///
+/// let frame = current_frame();
+/// if frame % 60 == 0 {
+///     // roughly once per second at 60 fps
+/// }
+/// ```
+pub fn current_frame() -> u64 {
+    FRAME_COUNTER.with(|c| c.get())
+}
+
+/// Returns a reactive [`Signal<u64>`] that increments by 1 on every frame tick.
+///
+/// The signal is a global singleton per thread — all callers share the same
+/// handle. Subscribe to it in effects or memos to drive frame-rate UI.
+///
+/// Must be called while building views under a running [`App`].
+///
+/// ```no_run
+/// use rax_runtime::use_frame_counter;
+///
+/// let frame = use_frame_counter();
+/// // frame.get() increases by 1 each tick
+/// ```
+pub fn use_frame_counter() -> Signal<u64> {
+    FRAME_COUNTER_SIGNAL.with(|slot| {
+        if let Some(sig) = slot.get() {
+            return sig;
+        }
+        let sig = create_signal(0u64);
+        slot.set(Some(sig));
+        sig
+    })
+}
+
+/// Returns a [`Memo<T>`] that only propagates a new value from `sig` after
+/// the signal has been **stable** (unchanged) for at least `frames` consecutive
+/// ticks.
+///
+/// This is a frame-aligned approximation of time-based debouncing. At 60 fps,
+/// `frames = 18` is roughly 300 ms of quiet time.
+///
+/// The returned memo starts with the current value of `sig` and will not update
+/// until `sig` has held the same value for `frames` ticks.
+///
+/// ```no_run
+/// use rax_runtime::{debounce, use_frame_counter};
+/// use rax_reactive::create_signal;
+///
+/// let query = create_signal(String::new());
+/// let debounced = debounce(query, 18); // ~300 ms at 60 fps
+/// ```
+pub fn debounce<T: Clone + PartialEq + 'static>(sig: Signal<T>, frames: u32) -> Memo<T> {
+    // Track: last value seen, how many frames it has been stable, and the
+    // committed (output) value.  All state lives inside the memo closure via
+    // RefCell so it survives across re-runs.
+    use std::cell::RefCell;
+    let state: Rc<RefCell<(T, u32, T)>> = {
+        // Read the initial value — this happens at Memo creation time, so we
+        // borrow sig without going through the reactive graph here.
+        let initial = sig.get();
+        Rc::new(RefCell::new((initial.clone(), 0, initial)))
+    };
+    let frame_sig = use_frame_counter();
+    create_memo(move || {
+        let _ = frame_sig.get(); // subscribe to frame ticks
+        let current = sig.get();
+        let mut s = state.borrow_mut();
+        if current == s.0 {
+            // Same as last observed — increment stability counter.
+            s.1 = s.1.saturating_add(1);
+        } else {
+            // Value changed — reset stability counter.
+            s.0 = current;
+            s.1 = 0;
+        }
+        if s.1 >= frames {
+            // Stable long enough — commit.
+            s.2 = s.0.clone();
+        }
+        s.2.clone()
+    })
+}
+
+/// Returns a [`Memo<T>`] that propagates at most the **first** change from
+/// `sig` within each window of `frames` ticks, ignoring further changes until
+/// the next window begins.
+///
+/// This is a frame-aligned approximation of time-based throttling. At 60 fps,
+/// `frames = 6` allows at most ~10 updates per second.
+///
+/// ```no_run
+/// use rax_runtime::throttle;
+/// use rax_reactive::create_signal;
+///
+/// let scroll = create_signal(0.0f32);
+/// let throttled = throttle(scroll, 6); // at most 10 fps of propagation
+/// ```
+pub fn throttle<T: Clone + PartialEq + 'static>(sig: Signal<T>, frames: u32) -> Memo<T> {
+    // State: (last committed frame, committed value).
+    use std::cell::RefCell;
+    let initial = sig.get();
+    let state: Rc<RefCell<(u64, T)>> = Rc::new(RefCell::new((0, initial)));
+    let frame_sig = use_frame_counter();
+    create_memo(move || {
+        let _ = frame_sig.get(); // subscribe to frame ticks
+        let now = current_frame();
+        let current = sig.get();
+        let mut s = state.borrow_mut();
+        if now.saturating_sub(s.0) >= u64::from(frames) {
+            // Window elapsed — propagate.
+            s.0 = now;
+            s.1 = current;
+        }
+        s.1.clone()
+    })
 }
 
 impl Drop for App {

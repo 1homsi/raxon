@@ -287,6 +287,260 @@ pub fn use_t() -> impl Fn(&str, &[(&str, &str)]) -> String + Clone {
     move |key: &str, args: &[(&str, &str)]| i18n.t(key, args)
 }
 
+// ---------------------------------------------------------------------------
+// Locale-aware number formatting
+// ---------------------------------------------------------------------------
+
+/// Format a number according to the current locale.
+/// `decimal_places` controls precision; None = no forced precision.
+pub fn format_number(i18n: &I18n, value: f64, decimal_places: Option<usize>) -> String {
+    // Use locale to pick decimal separator (',' for de, '.' for en)
+    let locale = i18n.locale.get();
+    let use_comma = matches!(
+        locale.as_str(),
+        "de" | "de-DE" | "fr" | "fr-FR" | "es" | "es-ES" | "it" | "it-IT" | "pt" | "pt-BR"
+    );
+    let formatted = match decimal_places {
+        Some(d) => format!("{:.prec$}", value, prec = d),
+        None => format!("{}", value),
+    };
+    // Add thousands separator
+    let parts: Vec<&str> = formatted.splitn(2, '.').collect();
+    let integer_part = add_thousands_separator(parts[0], if use_comma { '.' } else { ',' });
+    let result = if parts.len() > 1 {
+        let sep = if use_comma { ',' } else { '.' };
+        format!("{}{}{}", integer_part, sep, parts[1])
+    } else {
+        integer_part
+    };
+    result
+}
+
+fn add_thousands_separator(s: &str, sep: char) -> String {
+    let digits: Vec<char> = s.trim_start_matches('-').chars().collect();
+    let mut result = String::new();
+    let len = digits.len();
+    for (i, c) in digits.iter().enumerate() {
+        if i > 0 && (len - i) % 3 == 0 {
+            result.push(sep);
+        }
+        result.push(*c);
+    }
+    if s.starts_with('-') {
+        format!("-{}", result)
+    } else {
+        result
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Locale-aware currency formatting
+// ---------------------------------------------------------------------------
+
+/// Format `amount` as a currency string using the ISO 4217 `currency_code`.
+///
+/// Symbol placement (prefix vs suffix) follows locale conventions.
+pub fn format_currency(i18n: &I18n, amount: f64, currency_code: &str) -> String {
+    // Map common currency codes to symbols
+    let symbol = match currency_code {
+        "USD" => "$",
+        "EUR" => "€",
+        "GBP" => "£",
+        "JPY" => "¥",
+        "CNY" => "¥",
+        "KRW" => "₩",
+        "INR" => "₹",
+        "BRL" => "R$",
+        "CAD" => "CA$",
+        "AUD" => "A$",
+        "CHF" => "Fr",
+        "SEK" => "kr",
+        "NOK" => "kr",
+        "DKK" => "kr",
+        "SAR" => "﷼",
+        "AED" => "د.إ",
+        _ => currency_code,
+    };
+    let formatted = format_number(i18n, amount, Some(2));
+    // Currency symbol position varies by locale
+    let locale = i18n.locale.get();
+    let prefix_locales = ["en", "en-US", "en-GB", "en-AU", "zh", "ja", "ko"];
+    let is_prefix = prefix_locales.iter().any(|l| locale.starts_with(l));
+    if is_prefix {
+        format!("{}{}", symbol, formatted)
+    } else {
+        format!("{} {}", formatted, symbol)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Relative time formatting
+// ---------------------------------------------------------------------------
+
+/// Format a duration in seconds as a human-readable relative time.
+/// E.g. -60 -> "1 minute ago", 3600 -> "in 1 hour"
+pub fn format_relative_time(i18n: &I18n, seconds_from_now: i64) -> String {
+    let (past, future, just_now) = match i18n.locale.get().as_str() {
+        l if l.starts_with("fr") => ("{} il y a", "dans {}", "à l'instant"),
+        l if l.starts_with("de") => ("vor {}", "in {}", "gerade eben"),
+        l if l.starts_with("es") => ("hace {}", "en {}", "ahora mismo"),
+        l if l.starts_with("ar") => ("منذ {}", "في {}", "الآن"),
+        _ => ("{} ago", "in {}", "just now"),
+    };
+    let abs = seconds_from_now.unsigned_abs();
+    let unit = if abs < 45 {
+        return just_now.to_string();
+    } else if abs < 90 {
+        "1 minute".to_string()
+    } else if abs < 2700 {
+        format!("{} minutes", abs / 60)
+    } else if abs < 5400 {
+        "1 hour".to_string()
+    } else if abs < 79200 {
+        format!("{} hours", abs / 3600)
+    } else if abs < 129600 {
+        "1 day".to_string()
+    } else if abs < 2160000 {
+        format!("{} days", abs / 86400)
+    } else if abs < 3888000 {
+        "1 month".to_string()
+    } else if abs < 31104000 {
+        format!("{} months", abs / 2592000)
+    } else {
+        format!("{} years", abs / 31536000)
+    };
+    if seconds_from_now < 0 {
+        past.replace("{}", &unit)
+    } else {
+        future.replace("{}", &unit)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Locale-aware sorting / collation
+// ---------------------------------------------------------------------------
+
+/// Sort strings according to locale-aware ordering.
+/// For now: case-insensitive sort with locale-specific accent handling.
+/// Full ICU collation requires linking ICU4C — this is a lightweight approximation.
+pub fn collate_sort(i18n: &I18n, mut items: Vec<String>) -> Vec<String> {
+    let locale = i18n.locale.get();
+    let _ = locale; // Future: use locale for accent rules
+    items.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    items
+}
+
+/// Binary search in a collation-sorted slice.
+pub fn collate_search(items: &[String], query: &str) -> Vec<usize> {
+    let q = query.to_lowercase();
+    items
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| item.to_lowercase().contains(&q))
+        .map(|(i, _)| i)
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Pseudolocalization
+// ---------------------------------------------------------------------------
+
+/// Apply pseudolocalization to a string for testing i18n completeness.
+/// Replaces ASCII letters with accented equivalents and wraps in brackets.
+pub fn pseudolocalize(s: &str) -> String {
+    let mut result = String::from("[");
+    for c in s.chars() {
+        result.push(match c {
+            'a' => 'á',
+            'b' => 'ƀ',
+            'c' => 'ć',
+            'd' => 'ď',
+            'e' => 'é',
+            'f' => 'ƒ',
+            'g' => 'ĝ',
+            'h' => 'ĥ',
+            'i' => 'í',
+            'j' => 'ĵ',
+            'k' => 'ķ',
+            'l' => 'ĺ',
+            'm' => 'ṁ',
+            'n' => 'ń',
+            'o' => 'ó',
+            'p' => 'ƥ',
+            'q' => 'q',
+            'r' => 'ŕ',
+            's' => 'ś',
+            't' => 'ť',
+            'u' => 'ú',
+            'v' => 'v',
+            'w' => 'ŵ',
+            'x' => 'x',
+            'y' => 'ý',
+            'z' => 'ź',
+            'A' => 'Á',
+            'B' => 'Ɓ',
+            'C' => 'Ć',
+            'D' => 'Ď',
+            'E' => 'É',
+            'F' => 'Ƒ',
+            'G' => 'Ĝ',
+            'H' => 'Ĥ',
+            'I' => 'Í',
+            'J' => 'Ĵ',
+            'K' => 'Ķ',
+            'L' => 'Ĺ',
+            'M' => 'Ṁ',
+            'N' => 'Ń',
+            'O' => 'Ó',
+            'P' => 'Ƥ',
+            'Q' => 'Q',
+            'R' => 'Ŕ',
+            'S' => 'Ś',
+            'T' => 'Ť',
+            'U' => 'Ú',
+            'V' => 'V',
+            'W' => 'Ŵ',
+            'X' => 'X',
+            'Y' => 'Ý',
+            'Z' => 'Ź',
+            other => other,
+        });
+    }
+    result.push(']');
+    result
+}
+
+// ---------------------------------------------------------------------------
+// List formatting
+// ---------------------------------------------------------------------------
+
+/// Join a list of strings in a locale-aware way.
+/// E.g. `["a", "b", "c"]` → `"a, b, and c"` (en) or `"a, b et c"` (fr)
+pub fn format_list(i18n: &I18n, items: &[&str]) -> String {
+    if items.is_empty() {
+        return String::new();
+    }
+    if items.len() == 1 {
+        return items[0].to_string();
+    }
+    let locale = i18n.locale.get();
+    let (sep, last_sep) = match locale.as_str() {
+        l if l.starts_with("fr") => (", ", " et "),
+        l if l.starts_with("de") => (", ", " und "),
+        l if l.starts_with("es") => (", ", " y "),
+        l if l.starts_with("ar") => ("، ", " و"),
+        _ => (", ", ", and "),
+    };
+    let mut result = items[..items.len() - 1].join(sep);
+    result.push_str(last_sep);
+    result.push_str(items[items.len() - 1]);
+    result
+}
+
+// ---------------------------------------------------------------------------
+// System locale detection
+// ---------------------------------------------------------------------------
+
 /// Detect the preferred locale from the `LANG` environment variable.
 ///
 /// Returns the language tag portion of `LANG` (e.g. `"en-US"` from

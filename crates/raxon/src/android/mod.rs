@@ -25,6 +25,9 @@ pub type AndroidCommandQueue = Rc<RefCell<Vec<AndroidCommand>>>;
 /// Android host session used by generated JNI glue.
 pub type AndroidHostSession = crate::host::HostSession<AndroidDriver>;
 
+/// Android host-session registry keyed by opaque JNI-safe handles.
+pub type AndroidHostSessionRegistry = crate::host::HostSessionRegistry<AndroidDriver>;
+
 /// Host-originated Android event payload for JNI adapters.
 pub type AndroidWireEvent = crate::wire::WireEvent;
 
@@ -1321,6 +1324,15 @@ pub fn mount_android_host_session<V: View>(
     crate::host::HostSession::new(AndroidDriver::new(viewport, make_view))
 }
 
+/// Mounts an Android host session into a registry and returns its opaque handle.
+pub fn mount_android_host_session_in_registry<V: View>(
+    registry: &mut AndroidHostSessionRegistry,
+    viewport: Size,
+    make_view: impl FnOnce() -> V,
+) -> crate::host::HostSessionHandle {
+    registry.insert_driver(AndroidDriver::new(viewport, make_view))
+}
+
 /// Converts a color into Android's packed `0xAARRGGBB` layout.
 pub const fn color_to_argb(color: Color) -> u32 {
     color.to_argb_u32()
@@ -1511,5 +1523,55 @@ mod tests {
                 && command["attr"]["name"].as_str() == Some("text")
                 && command["attr"]["value"].as_str() == Some("Count 1")
         }));
+    }
+
+    #[test]
+    fn host_session_registry_routes_opaque_handles() {
+        let count = create_signal(0);
+        let text_count = count;
+        let button_count = count;
+        let mut registry = AndroidHostSessionRegistry::new();
+        let handle =
+            mount_android_host_session_in_registry(&mut registry, Size::new(320.0, 480.0), || {
+                column((
+                    text(move || format!("Count {}", text_count.get())),
+                    button("Tap", move || button_count.update(|value| *value += 1)),
+                ))
+            });
+        assert!(registry.contains(handle));
+
+        let initial = registry
+            .get(handle)
+            .expect("session exists")
+            .driver()
+            .drain_command_batch();
+        let button_id = initial
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                AndroidWireCommand::Create { id, class_name }
+                    if class_name == "android.widget.Button" =>
+                {
+                    Some(*id)
+                }
+                _ => None,
+            })
+            .expect("button create command is present");
+        let encoded = AndroidWireEventBatch::new(vec![AndroidWireEvent::Tap { target: button_id }])
+            .encode_json()
+            .expect("event batch encodes");
+
+        let commands = registry
+            .dispatch_events_tick_and_drain_command_batch_json(handle, &encoded)
+            .expect("registry dispatches into session");
+
+        assert!(commands.contains("\"Count 1\""));
+        assert!(registry.remove(handle).is_some());
+        assert_eq!(
+            registry.tick(handle),
+            Err(crate::host::HostSessionError::UnknownSession {
+                handle: handle.to_raw(),
+            })
+        );
     }
 }

@@ -25,6 +25,9 @@ pub type DomCommandQueue = Rc<RefCell<Vec<DomCommand>>>;
 /// Web host session used by generated browser glue.
 pub type WebHostSession = crate::host::HostSession<WebDriver>;
 
+/// Web host-session registry keyed by opaque browser-safe handles.
+pub type WebHostSessionRegistry = crate::host::HostSessionRegistry<WebDriver>;
+
 /// Host-originated web event payload for JavaScript adapters.
 pub type DomWireEvent = crate::wire::WireEvent;
 
@@ -1305,6 +1308,15 @@ pub fn mount_web_host_session<V: View>(
     crate::host::HostSession::new(WebDriver::new(viewport, make_view))
 }
 
+/// Mounts a web host session into a registry and returns its opaque handle.
+pub fn mount_web_host_session_in_registry<V: View>(
+    registry: &mut WebHostSessionRegistry,
+    viewport: Size,
+    make_view: impl FnOnce() -> V,
+) -> crate::host::HostSessionHandle {
+    registry.insert_driver(WebDriver::new(viewport, make_view))
+}
+
 /// Converts a color into an `rgba(r, g, b, a)` CSS string.
 pub fn color_to_css(color: Color) -> String {
     let alpha = color.a as f32 / 255.0;
@@ -1491,5 +1503,51 @@ mod tests {
                 && command["attr"]["name"].as_str() == Some("text")
                 && command["attr"]["value"].as_str() == Some("Count 1")
         }));
+    }
+
+    #[test]
+    fn host_session_registry_routes_opaque_handles() {
+        let count = create_signal(0);
+        let text_count = count;
+        let button_count = count;
+        let mut registry = WebHostSessionRegistry::new();
+        let handle =
+            mount_web_host_session_in_registry(&mut registry, Size::new(320.0, 480.0), || {
+                column((
+                    text(move || format!("Count {}", text_count.get())),
+                    button("Tap", move || button_count.update(|value| *value += 1)),
+                ))
+            });
+        assert!(registry.contains(handle));
+
+        let initial = registry
+            .get(handle)
+            .expect("session exists")
+            .driver()
+            .drain_command_batch();
+        let button_id = initial
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                DomWireCommand::Create { id, tag_name, .. } if tag_name == "button" => Some(*id),
+                _ => None,
+            })
+            .expect("button create command is present");
+        let encoded = DomWireEventBatch::new(vec![DomWireEvent::Tap { target: button_id }])
+            .encode_json()
+            .expect("event batch encodes");
+
+        let commands = registry
+            .dispatch_events_tick_and_drain_command_batch_json(handle, &encoded)
+            .expect("registry dispatches into session");
+
+        assert!(commands.contains("\"Count 1\""));
+        assert!(registry.remove(handle).is_some());
+        assert_eq!(
+            registry.tick(handle),
+            Err(crate::host::HostSessionError::UnknownSession {
+                handle: handle.to_raw(),
+            })
+        );
     }
 }

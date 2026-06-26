@@ -32,6 +32,12 @@ ureq = { version = "2", default-features = false, features = [] }
 [target.'cfg(not(any(target_os = "android", all(target_arch = "wasm32", target_os = "unknown"))))'.dependencies]
 rusqlite = { version = "0.31", features = ["bundled"] }
 
+# Web target: real fetch + WebSocket via the browser, through gloo-net (which
+# wraps web-sys). wasm-only — native targets keep ureq/tungstenite.
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+gloo-net = { version = "0.6", default-features = false, features = ["http", "websocket"] }
+wasm-bindgen-futures = "0.4"
+
 [target.'cfg(target_os = "ios")'.dependencies]
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = [

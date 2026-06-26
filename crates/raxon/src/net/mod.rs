@@ -163,6 +163,74 @@ pub fn set_client(client: impl HttpClient + 'static) {
     CLIENT.with(|c| *c.borrow_mut() = Box::new(client));
 }
 
+// ---------------------------------------------------------------------------
+// Web (wasm) HTTP client — real browser `fetch` via gloo-net.
+// ---------------------------------------------------------------------------
+
+/// Browser-`fetch`-backed client. `send` drives the request on the browser
+/// microtask loop (`spawn_local`) and bridges the result back to the rax
+/// executor through a `oneshot` — the same decoupling the iOS client uses for
+/// its background thread, so completion never depends on the frame cadence.
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+struct WebFetchClient;
+
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+impl HttpClient for WebFetchClient {
+    fn send(&self, request: Request) -> ResponseFuture {
+        let (tx, rx) = futures::channel::oneshot::channel::<Result<Response, String>>();
+        wasm_bindgen_futures::spawn_local(async move {
+            let _ = tx.send(web_fetch(request).await);
+        });
+        Box::pin(async move {
+            rx.await
+                .unwrap_or_else(|_| Err("web HTTP request was dropped".to_string()))
+        })
+    }
+}
+
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+async fn web_fetch(request: Request) -> Result<Response, String> {
+    use gloo_net::http::Request as GlooRequest;
+
+    let mut builder = match request.method {
+        Method::Get => GlooRequest::get(&request.url),
+        Method::Post => GlooRequest::post(&request.url),
+        Method::Put => GlooRequest::put(&request.url),
+        Method::Patch => GlooRequest::patch(&request.url),
+        Method::Delete => GlooRequest::delete(&request.url),
+    };
+    for (name, value) in &request.headers {
+        builder = builder.header(name, value);
+    }
+    let response = if let Some(body) = request.body {
+        builder.body(body).map_err(|e| e.to_string())?.send().await
+    } else {
+        builder.send().await
+    }
+    .map_err(|e| e.to_string())?;
+
+    let status = response.status();
+    let body = response.text().await.map_err(|e| e.to_string())?;
+    Ok(Response {
+        status,
+        body_bytes: body.as_bytes().to_vec(),
+        body,
+    })
+}
+
+/// Installs the default web HTTP client (browser `fetch` via gloo-net) so
+/// `get`/`post`/`use_query`/etc. work out of the box in the browser. The web
+/// host calls this automatically on mount; apps may override with
+/// [`set_client`]. A no-op on native targets, which keep their own client.
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+pub fn install_web_http_client() {
+    set_client(WebFetchClient);
+}
+
+/// No-op on native targets (they configure a real platform client directly).
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+pub fn install_web_http_client() {}
+
 /// The single choke point every async/reactive request passes through.
 ///
 /// Applies the registered [interceptors](add_interceptor) to the request's URL
@@ -259,9 +327,19 @@ pub struct WsHandle {
     tx: std::sync::mpsc::SyncSender<tungstenite::Message>,
 }
 
+/// An outgoing instruction to the browser WebSocket writer task.
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+enum WsControl {
+    Text(String),
+    Binary(Vec<u8>),
+    Close,
+}
+
 /// A handle to an active browser WebSocket connection.
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
-pub struct WsHandle;
+pub struct WsHandle {
+    tx: futures::channel::mpsc::UnboundedSender<WsControl>,
+}
 
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 impl WsHandle {
@@ -284,13 +362,19 @@ impl WsHandle {
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 impl WsHandle {
     /// Send a text message to the server.
-    pub fn send_text(&self, _msg: impl Into<String>) {}
+    pub fn send_text(&self, msg: impl Into<String>) {
+        let _ = self.tx.unbounded_send(WsControl::Text(msg.into()));
+    }
 
     /// Send a binary message to the server.
-    pub fn send_binary(&self, _data: Vec<u8>) {}
+    pub fn send_binary(&self, data: Vec<u8>) {
+        let _ = self.tx.unbounded_send(WsControl::Binary(data));
+    }
 
     /// Close the connection gracefully.
-    pub fn close(self) {}
+    pub fn close(self) {
+        let _ = self.tx.unbounded_send(WsControl::Close);
+    }
 }
 
 /// Connect to a WebSocket server at `url` (must start with `ws://` or `wss://`).
@@ -362,10 +446,51 @@ fn connect_ws_impl(
 
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 fn connect_ws_impl(
-    _url: String,
-    _on_message: impl Fn(WsMessage) + Send + 'static,
+    url: String,
+    on_message: impl Fn(WsMessage) + Send + 'static,
 ) -> Result<WsHandle, String> {
-    Err("web WebSocket support requires the browser host bridge".to_string())
+    use futures::{SinkExt, StreamExt};
+    use gloo_net::websocket::{futures::WebSocket, Message};
+
+    let ws = WebSocket::open(&url).map_err(|e| e.to_string())?;
+    let (mut write, mut read) = ws.split();
+    let (tx, mut rx) = futures::channel::mpsc::unbounded::<WsControl>();
+
+    // Writer task: forward queued outgoing messages to the socket.
+    wasm_bindgen_futures::spawn_local(async move {
+        while let Some(ctrl) = rx.next().await {
+            match ctrl {
+                WsControl::Text(t) => {
+                    if write.send(Message::Text(t)).await.is_err() {
+                        break;
+                    }
+                }
+                WsControl::Binary(b) => {
+                    if write.send(Message::Bytes(b)).await.is_err() {
+                        break;
+                    }
+                }
+                WsControl::Close => {
+                    let _ = write.close().await;
+                    break;
+                }
+            }
+        }
+    });
+
+    // Reader task: deliver incoming frames to `on_message`.
+    wasm_bindgen_futures::spawn_local(async move {
+        while let Some(msg) = read.next().await {
+            match msg {
+                Ok(Message::Text(t)) => on_message(WsMessage::Text(t)),
+                Ok(Message::Bytes(b)) => on_message(WsMessage::Binary(b)),
+                Err(_) => break,
+            }
+        }
+        on_message(WsMessage::Close);
+    });
+
+    Ok(WsHandle { tx })
 }
 
 // ---------------------------------------------------------------------------

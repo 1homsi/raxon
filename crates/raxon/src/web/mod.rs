@@ -1331,6 +1331,10 @@ pub struct WebDriver {
 impl WebDriver {
     /// Mounts an app using the DOM command backend.
     pub fn new<V: View>(viewport: Size, make_view: impl FnOnce() -> V) -> Self {
+        // Route HTTP through the JS host's `fetch` so `get`/`post`/`use_query`
+        // work out of the box on the web. Apps may still override with
+        // `net::set_client`.
+        crate::net::install_web_http_client();
         let backend = WebDomBackend::new();
         let commands = backend.commands();
         let app = App::new(Host::new(backend), viewport, make_view);

@@ -5,15 +5,15 @@ a stable plugin ABI (see [extensibility](extensibility-and-plugins.md)). Goal:
 the union of RN community modules + Flutter plugins + Expo SDK. ⬜ planned.
 
 ## Sensors & hardware
-- ⬜ accelerometer, gyroscope, magnetometer, barometer
+- ✅ accelerometer, gyroscope (`use_accelerometer/gyroscope() -> Signal<Option<AccelerometerData/GyroscopeData>>`; `update_accelerometer/gyroscope(data)` platform hooks); ⬜ magnetometer, barometer
 - ⬜ device motion / orientation, pedometer
 - ⬜ proximity, ambient light
 - ✅ haptics (`haptic(HapticStyle)` — UIImpactFeedbackGenerator / UINotificationFeedbackGenerator / UISelectionFeedbackGenerator)
 - ✅ battery status (`use_battery_level() -> Signal<f32>`, `use_battery_charging() -> Signal<bool>` — UIDevice, polled every 60 ticks)
-- ⬜ flashlight / torch
+- ✅ flashlight / torch (`set_torch(on: bool)` → `Mutation::SetTorch` → AVCaptureDevice stub)
 
 ## Location & maps
-- ⬜ GPS location (one-shot + watch), permissions
+- ✅ GPS location (`use_location() -> Signal<Option<GeoLocation>>`; `GeoLocation{lat,lon,alt,accuracy,speed}`; `request_location/stop_location_updates()` → CLLocationManager stub)
 - ⬜ geofencing, background location
 - ⬜ geocoding / reverse geocoding
 - ⬜ Map view (markers, polylines, regions, clustering)
@@ -33,13 +33,14 @@ the union of RN community modules + Flutter plugins + Expo SDK. ⬜ planned.
 
 ## Notifications & background
 - ✅ local notifications (`schedule_notification` / `cancel_notification` — UNUserNotificationCenter, time-interval trigger)
-- ⬜ push notifications (APNs/FCM), rich/silent push
+- ✅ push notification token (`register_for_push()` → `UIApplication.registerForRemoteNotifications` stub; `use_push_token() -> Signal<Option<String>>`; `update_push_token/clear_push_token`)
+- ⬜ push notifications (APNs/FCM payload handling), rich/silent push
 - ⬜ background tasks / background fetch / headless tasks
-- ⬜ app badge, live activities / dynamic island, widgets (home-screen)
+- ✅ app badge (`set_app_badge(count)` → `setApplicationIconBadgeNumber:` via pending queue in tick); ⬜ live activities, widgets
 
 ## Identity & security
 - ✅ biometrics (`authenticate_biometric(reason)` — LAContext, Face/Touch ID → `Event::BiometricResult`)
-- ⬜ secure storage / keychain / keystore
+- ✅ secure storage / keychain (`rax-keychain`: `set/get/delete_secret` — Security.framework on iOS)
 - ⬜ auth helpers (OAuth, sign-in-with-Apple/Google), deep-link auth
 - ⬜ app attest / integrity, encryption primitives
 

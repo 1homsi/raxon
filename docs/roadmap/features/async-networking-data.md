@@ -6,7 +6,7 @@ Match `fetch`/axios/react-query (RN) and `http`/`dio`/`riverpod` (Flutter). ⬜.
 - ✅ `Executor` trait (pluggable); small default executor (not tokio-locked)
 - ⬜ UI-thread `spawn_local` + worker-thread `spawn`
 - ⬜ wakers marshal completions onto the UI thread (scheduler)
-- ⬜ timers, intervals, debounce/throttle, `next_frame`
+- ✅ debounce/throttle (`debounce<T>(sig, frames) -> Memo<T>`, `throttle<T>(sig, frames) -> Memo<T>` — frame-counter-based); `use_frame_counter() -> Signal<u64>`, `current_frame() -> u64`; ⬜ proper wall-clock timers, intervals, `next_frame`
 - ⬜ cancellation tied to component/ownership scopes
 - ⬜ structured concurrency helpers
 
@@ -16,8 +16,8 @@ Match `fetch`/axios/react-query (RN) and `http`/`dio`/`riverpod` (Flutter). ⬜.
 - ✅ request interceptors (`add_interceptor(fn(url,headers))` — applied before every request)
 - ✅ upload (`upload_bytes(url, data, content_type)` — raw byte POST)
 - ⬜ TLS, cert pinning, cookies, redirects, backoff
-- ⬜ streaming download, progress
-- ⬜ JSON (serde) + form/urlencoded; typed request/response
+- ✅ streaming download with progress (`download_with_progress(url, on_progress)` — 8KiB chunks, `DownloadProgress{bytes_received, total_bytes, fraction}`)
+- ✅ JSON / typed request-response (`Response::json<T>()`, `Response::json_value()`, `parse_json<T>(response)`, `get_json<T>(url) -> Resource<T>` — serde_json backed)
 - ✅ WebSocket client (`connect_ws(url, on_message)` — tungstenite, background thread, send/receive)
 - ✅ SSE (`connect_sse(url, on_event)` — ureq BufReader)
 - ✅ GraphQL (`graphql(endpoint, query, variables) -> Resource<Response>`)

@@ -28,6 +28,11 @@ thread_local! {
     static PENDING_HAPTICS: std::cell::RefCell<Vec<crate::dom::HapticStyle>> =
         const { std::cell::RefCell::new(Vec::new()) };
 
+    /// Document-picker requests queued by [`present_document_picker`]. Drained by
+    /// [`App::tick`]. Each entry is the list of allowed UTType identifiers.
+    static PENDING_DOCUMENT_PICKER: RefCell<Vec<Vec<String>>> =
+        const { RefCell::new(Vec::new()) };
+
     /// Background task identifiers to register. Drained by [`App::tick`].
     static PENDING_BG_REGISTRATIONS: RefCell<Vec<String>> =
         const { RefCell::new(Vec::new()) };
@@ -205,6 +210,19 @@ pub fn last_panic() -> Option<String> {
 /// ```
 pub fn haptic(style: HapticStyle) {
     PENDING_HAPTICS.with(|q| q.borrow_mut().push(style));
+}
+
+/// Presents the system document picker. `types` are UTType identifiers
+/// (e.g. `["public.pdf", "public.plain-text"]`); pass an empty `Vec` to allow
+/// any file. The chosen files arrive as a global [`crate::dom::Event::DocumentPicked`]
+/// carrying `(filename, bytes)` for each pick.
+///
+/// ```no_run
+/// # use raxon::runtime::present_document_picker;
+/// present_document_picker(vec!["public.pdf".into()]);
+/// ```
+pub fn present_document_picker(types: Vec<String>) {
+    PENDING_DOCUMENT_PICKER.with(|q| q.borrow_mut().push(types));
 }
 
 /// Registers a handler for deep link URLs. The handler fires whenever the app
@@ -1074,6 +1092,15 @@ impl App {
         });
         for style in haptics {
             self.tree.haptic(style);
+        }
+
+        // Drain any document-picker requests queued by app code.
+        let doc_pickers: Vec<Vec<String>> = PENDING_DOCUMENT_PICKER.with(|q| {
+            let mut v = q.borrow_mut();
+            std::mem::take(&mut *v)
+        });
+        for types in doc_pickers {
+            self.tree.present_document_picker(types);
         }
 
         // Drain any local notifications queued by app code.

@@ -235,6 +235,11 @@ pub enum Event {
     },
     /// The user cancelled the media picker without selecting anything.
     MediaPickerCancelled,
+    /// The user picked one or more documents from the file picker.
+    DocumentPicked {
+        /// Each picked file as `(filename, bytes)`. Empty if the user cancelled.
+        files: Vec<(String, Vec<u8>)>,
+    },
     /// A background task was launched by the system (BGTaskScheduler).
     BackgroundTaskStarted {
         /// The identifier of the task that was launched.
@@ -311,6 +316,8 @@ pub enum EventKind {
     MediaPicked,
     /// [`Event::MediaPickerCancelled`].
     MediaPickerCancelled,
+    /// [`Event::DocumentPicked`].
+    DocumentPicked,
     /// [`Event::BackgroundTaskStarted`].
     BackgroundTaskStarted,
 }
@@ -346,6 +353,7 @@ impl Event {
             Event::MotionUpdated { .. } => EventKind::MotionUpdated,
             Event::MediaPicked { .. } => EventKind::MediaPicked,
             Event::MediaPickerCancelled => EventKind::MediaPickerCancelled,
+            Event::DocumentPicked { .. } => EventKind::DocumentPicked,
             Event::BackgroundTaskStarted { .. } => EventKind::BackgroundTaskStarted,
         }
     }
@@ -380,6 +388,7 @@ impl Event {
             | Event::MotionUpdated { .. }
             | Event::MediaPicked { .. }
             | Event::MediaPickerCancelled
+            | Event::DocumentPicked { .. }
             | Event::BackgroundTaskStarted { .. } => None,
             Event::RotateChanged { target, .. } => Some(target),
         }

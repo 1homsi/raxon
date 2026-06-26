@@ -1239,6 +1239,13 @@ pub enum Mutation {
         /// Maximum number of items to select (1 for single-select).
         max_selection: usize,
     },
+    /// Present a document picker (UIDocumentPickerViewController). Results arrive
+    /// via `Event::DocumentPicked`.
+    PresentDocumentPicker {
+        /// Allowed UTType identifiers (e.g. `"public.pdf"`, `"public.plain-text"`).
+        /// Empty means any file (`public.item`).
+        types: Vec<String>,
+    },
     /// Register a background task identifier with BGTaskScheduler.
     /// Must be called during app launch before the first background task fires.
     /// The identifier must also appear in `BGTaskSchedulerPermittedIdentifiers` in Info.plist.

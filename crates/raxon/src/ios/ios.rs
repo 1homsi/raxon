@@ -96,6 +96,11 @@ thread_local! {
     static PENDING_MEDIA_CANCEL: Cell<bool> = const { Cell::new(false) };
     // Keep the MediaPickerDelegate alive while the picker is visible.
     static MEDIA_PICKER_DELEGATE: RefCell<Option<Retained<MediaPickerDelegate>>> = const { RefCell::new(None) };
+    // Document picker results queued from the UIDocumentPickerDelegate callback.
+    // Each entry is one pick session's files as (filename, bytes).
+    static PENDING_DOCUMENTS: RefCell<Vec<Vec<(String, Vec<u8>)>>> = const { RefCell::new(Vec::new()) };
+    // Keep the DocumentPickerDelegate alive while the picker is visible.
+    static DOCUMENT_PICKER_DELEGATE: RefCell<Option<Retained<DocumentPickerDelegate>>> = const { RefCell::new(None) };
     // Frame timestamps for FPS calculation (ring buffer of the last 1 second).
     static FRAME_TIMESTAMPS: RefCell<std::collections::VecDeque<std::time::Instant>> =
         RefCell::new(std::collections::VecDeque::new());
@@ -222,6 +227,12 @@ fn handle_tick() {
     });
     let media_cancelled = PENDING_MEDIA_CANCEL.with(|c| c.replace(false));
 
+    // Drain document picker results.
+    let document_results: Vec<Vec<(String, Vec<u8>)>> = PENDING_DOCUMENTS.with(|q| {
+        let mut v = q.borrow_mut();
+        std::mem::take(&mut *v)
+    });
+
     STATE.with(|s| {
         if let Some(state) = s.borrow().as_ref() {
             // Feed the platform safe-area insets to the runtime each frame; it
@@ -294,6 +305,10 @@ fn handle_tick() {
             }
             if media_cancelled {
                 state.event_sink.dispatch(Event::MediaPickerCancelled);
+            }
+            // Dispatch document picker results.
+            for files in document_results {
+                state.event_sink.dispatch(Event::DocumentPicked { files });
             }
             app.tick();
             crate::plugin::tick_plugins();
@@ -842,6 +857,68 @@ define_class!(
             PENDING_MEDIA.with(|q| q.borrow_mut().push(vec![]));
             // Drop the delegate now that the pick is complete.
             MEDIA_PICKER_DELEGATE.with(|d| *d.borrow_mut() = None);
+        }
+    }
+);
+
+define_class!(
+    /// UIDocumentPickerDelegate that reads picked files' bytes and queues them
+    /// for dispatch on the next tick as `Event::DocumentPicked`.
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "RaxDocumentPickerDelegate"]
+    struct DocumentPickerDelegate;
+
+    unsafe impl NSObjectProtocol for DocumentPickerDelegate {}
+
+    impl DocumentPickerDelegate {
+        /// `documentPicker:didPickDocumentsAtURLs:` — fires with the chosen file URLs.
+        #[unsafe(method(documentPicker:didPickDocumentsAtURLs:))]
+        fn did_pick(&self, _picker: &AnyObject, urls: &NSMutableArray<AnyObject>) {
+            let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+            unsafe {
+                let count: usize = msg_send![urls, count];
+                for i in 0..count {
+                    let url: *mut AnyObject = msg_send![urls, objectAtIndex: i];
+                    if url.is_null() {
+                        continue;
+                    }
+                    // Security-scoped resources must be opened before reading.
+                    let scoped: bool = msg_send![url, startAccessingSecurityScopedResource];
+                    let name = {
+                        let comp: *mut AnyObject = msg_send![url, lastPathComponent];
+                        if comp.is_null() {
+                            String::from("file")
+                        } else {
+                            (*(comp as *const NSString)).to_string()
+                        }
+                    };
+                    let data: *mut AnyObject = msg_send![class!(NSData), dataWithContentsOfURL: url];
+                    if !data.is_null() {
+                        let len: usize = msg_send![data, length];
+                        let ptr: *const u8 = msg_send![data, bytes];
+                        let bytes = if ptr.is_null() || len == 0 {
+                            Vec::new()
+                        } else {
+                            std::slice::from_raw_parts(ptr, len).to_vec()
+                        };
+                        files.push((name, bytes));
+                    }
+                    if scoped {
+                        let _: () = msg_send![url, stopAccessingSecurityScopedResource];
+                    }
+                }
+            }
+            PENDING_DOCUMENTS.with(|q| q.borrow_mut().push(files));
+            DOCUMENT_PICKER_DELEGATE.with(|d| *d.borrow_mut() = None);
+        }
+
+        /// `documentPickerWasCancelled:` — user dismissed without picking.
+        #[unsafe(method(documentPickerWasCancelled:))]
+        fn was_cancelled(&self, _picker: &AnyObject) {
+            // Deliver an empty pick so the app can react if it wants.
+            PENDING_DOCUMENTS.with(|q| q.borrow_mut().push(Vec::new()));
+            DOCUMENT_PICKER_DELEGATE.with(|d| *d.borrow_mut() = None);
         }
     }
 );
@@ -3196,6 +3273,50 @@ impl Backend for UiKitBackend {
 
                     // Present using the root view controller (the UIViewController
                     // created in setup(), which owns the app's content view).
+                    STATE.with(|s| {
+                        if let Some(state) = s.borrow().as_ref() {
+                            let vc: &UIViewController = &state._view_controller;
+                            let _: () = msg_send![vc, presentViewController: picker animated: true completion: std::ptr::null::<AnyObject>()];
+                        }
+                    });
+                }
+            }
+            Mutation::PresentDocumentPicker { types } => {
+                unsafe {
+                    // Build a [UTType] array from the requested identifiers; an
+                    // empty list means "any file" (public.item).
+                    let id_list = if types.is_empty() {
+                        vec!["public.item".to_string()]
+                    } else {
+                        types
+                    };
+                    let ut_types = NSMutableArray::<AnyObject>::new();
+                    for ident in &id_list {
+                        let ns = NSString::from_str(ident);
+                        let ut: *mut AnyObject =
+                            msg_send![class!(UTType), typeWithIdentifier: &*ns];
+                        if !ut.is_null() {
+                            let obj: &AnyObject = &*ut;
+                            ut_types.addObject(obj);
+                        }
+                    }
+
+                    let picker: *mut AnyObject =
+                        msg_send![class!(UIDocumentPickerViewController), alloc];
+                    let picker: *mut AnyObject =
+                        msg_send![picker, initForOpeningContentTypes: &*ut_types];
+                    if picker.is_null() {
+                        // Deliver an empty pick so the app isn't left hanging.
+                        PENDING_DOCUMENTS.with(|q| q.borrow_mut().push(Vec::new()));
+                        return;
+                    }
+                    let _: () = msg_send![picker, setAllowsMultipleSelection: true];
+
+                    let delegate: Retained<DocumentPickerDelegate> =
+                        msg_send![DocumentPickerDelegate::class(), new];
+                    let _: () = msg_send![picker, setDelegate: &*delegate];
+                    DOCUMENT_PICKER_DELEGATE.with(|d| *d.borrow_mut() = Some(delegate));
+
                     STATE.with(|s| {
                         if let Some(state) = s.borrow().as_ref() {
                             let vc: &UIViewController = &state._view_controller;

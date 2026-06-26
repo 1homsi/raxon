@@ -95,11 +95,11 @@ pub mod prelude {
 
     pub use crate::runtime::{
         authenticate_biometric, cancel_notification, clear_ui_state, haptic,
-        install_error_overlay, last_panic, on_deep_link, register_background_task,
-        restore_ui_state, save_ui_state, schedule_background_task, schedule_notification,
-        set_backdrop, start_location, start_motion, stop_location, stop_motion, use_color_scheme,
-        use_safe_area_insets, App, Backdrop, HapticStyle, KeyboardType, LocalNotification,
-        TextStyle,
+        install_error_overlay, last_panic, on_deep_link, present_document_picker,
+        register_background_task, restore_ui_state, save_ui_state, schedule_background_task,
+        schedule_notification, set_backdrop, start_location, start_motion, stop_location,
+        stop_motion, use_color_scheme, use_safe_area_insets, App, Backdrop, HapticStyle,
+        KeyboardType, LocalNotification, TextStyle,
     };
 
     pub use crate::anim::{

@@ -254,6 +254,13 @@ impl Tree {
         self.host.emit(Mutation::PresentMediaPicker { max_selection });
     }
 
+    /// Presents the system document picker (UIDocumentPickerViewController on
+    /// iOS). `types` are UTType identifiers (empty = any file). Results arrive
+    /// as a global [`Event::DocumentPicked`].
+    pub fn present_document_picker(&mut self, types: Vec<String>) {
+        self.host.emit(Mutation::PresentDocumentPicker { types });
+    }
+
     /// Registers a background task identifier with BGTaskScheduler.
     /// Must be called during app launch before the first background task fires.
     pub fn register_background_task(&mut self, identifier: String) {

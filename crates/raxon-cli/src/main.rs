@@ -57,11 +57,14 @@ fn main() {
                 println!("{}", build_usage());
                 return;
             }
-            let options = parse_build_options(&args).unwrap_or_else(|error| {
+            let mut options = parse_build_options(&args).unwrap_or_else(|error| {
                 eprintln!("{error}");
                 eprintln!("Usage: rax build [--target ios-sim|ios|android|web|macos] [--dry-run]");
                 process::exit(1);
             });
+            if !target_was_given(&args) && Path::new("web/dev-server.mjs").exists() {
+                options.target = "web".to_string();
+            }
             run_build(&options);
         }
         Some("run") => {
@@ -73,11 +76,14 @@ fn main() {
                 println!("{}", run_usage());
                 return;
             }
-            let options = parse_run_options(&args).unwrap_or_else(|error| {
+            let mut options = parse_run_options(&args).unwrap_or_else(|error| {
                 eprintln!("{error}");
                 eprintln!("Usage: rax run [--target ios-sim|ios|android|web] [--dry-run]");
                 process::exit(1);
             });
+            if !target_was_given(&args) && Path::new("web/dev-server.mjs").exists() {
+                options.target = "web".to_string();
+            }
             run_run(&options);
         }
         Some("test") => {
@@ -534,7 +540,97 @@ fn parse_build_options(args: &[String]) -> Result<BuildOptions, String> {
     Ok(options)
 }
 
+/// Whether the user explicitly passed a `--target`/`-t` flag (vs. relying on the
+/// auto-detected default).
+fn target_was_given(args: &[String]) -> bool {
+    args.iter().any(|a| a == "--target" || a == "-t")
+}
+
+/// The bin directory of a rustup toolchain that has the wasm target, so we can
+/// put it ahead of a Homebrew `rustc` (which has no wasm std) on PATH. Returns
+/// `None` when rustup isn't installed (then we rely on whatever `rustc` is set).
+fn rustup_toolchain_bin() -> Option<String> {
+    let out = Command::new("rustup")
+        .args(["which", "--toolchain", "stable", "rustc"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    Path::new(&path)
+        .parent()
+        .map(|parent| parent.display().to_string())
+}
+
+/// Builds the web wasm bundle via `wasm-pack`, forcing a rustup toolchain that
+/// has `wasm32-unknown-unknown` so the user never has to set `RUSTC` by hand.
+fn wasm_pack_build(profile: BuildProfile, dry_run: bool) -> Result<(), i32> {
+    let mut cmd = Command::new("wasm-pack");
+    cmd.args([
+        "build", "--target", "web", "--out-name", "app", "--out-dir", "web/pkg",
+    ]);
+    cmd.arg(if matches!(profile, BuildProfile::Release) {
+        "--release"
+    } else {
+        "--dev"
+    });
+    if let Some(bin) = rustup_toolchain_bin() {
+        let path = env::var("PATH").unwrap_or_default();
+        cmd.env("PATH", format!("{bin}:{path}"));
+    }
+    println!("→ wasm-pack build --target web --out-name app --out-dir web/pkg");
+    if dry_run {
+        println!("Dry run only; no commands executed.");
+        return Ok(());
+    }
+    match cmd.status() {
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => Err(status.code().unwrap_or(1)),
+        Err(error) => {
+            eprintln!("Failed to run wasm-pack: {error}");
+            eprintln!("Install it with: cargo install wasm-pack");
+            Err(1)
+        }
+    }
+}
+
+/// Serves the generated `web/` directory with its zero-dependency dev server.
+fn serve_web(host: &str, port: u16, dry_run: bool) -> Result<(), i32> {
+    println!("→ node ./dev-server.mjs   (http://{host}:{port})");
+    if dry_run {
+        return Ok(());
+    }
+    if !Path::new("web/dev-server.mjs").exists() {
+        eprintln!("No web/dev-server.mjs found; run `raxon generate --target web --out .` first.");
+        return Err(1);
+    }
+    let status = Command::new("node")
+        .arg("./dev-server.mjs")
+        .current_dir("web")
+        .env("HOST", host)
+        .env("PORT", port.to_string())
+        .status();
+    match status {
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => Err(status.code().unwrap_or(1)),
+        Err(error) => {
+            eprintln!("Failed to run node: {error}");
+            Err(1)
+        }
+    }
+}
+
 fn run_build(options: &BuildOptions) {
+    // Web builds go through wasm-pack (wasm-bindgen), with the toolchain handled.
+    if options.target == "web" {
+        if let Err(code) = wasm_pack_build(options.profile, options.dry_run) {
+            process::exit(code);
+        }
+        println!("✓ wasm bundle at web/pkg/app.js");
+        return;
+    }
+
     let plan = create_build_plan(options).unwrap_or_else(|error| {
         eprintln!("Failed to plan build: {error}");
         process::exit(1);
@@ -1138,6 +1234,19 @@ fn parse_run_options(args: &[String]) -> Result<RunOptions, String> {
 fn run_run(options: &RunOptions) {
     if matches!(options.target.as_str(), "ios-sim" | "ios") {
         print_ios_run_steps(&options.target);
+        return;
+    }
+
+    // Web: build the wasm bundle (wasm-pack + toolchain handled) then serve it.
+    if options.target == "web" {
+        if !options.no_build {
+            if let Err(code) = wasm_pack_build(options.build.profile, options.dry_run) {
+                process::exit(code);
+            }
+        }
+        if let Err(code) = serve_web(&options.host, options.port, options.dry_run) {
+            process::exit(code);
+        }
         return;
     }
 

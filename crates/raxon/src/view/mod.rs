@@ -71,7 +71,10 @@ pub use composite::{
 };
 pub use web_view::{web_view, web_view_html, WebView};
 pub use container::{column, row, stack, Container, Stack};
-pub use controls::{segmented, slider, stepper, switch, Segmented, Slider, Stepper, Switch};
+pub use controls::{
+    date_picker, date_range_picker, segmented, slider, stepper, switch, DatePicker, Segmented,
+    Slider, Stepper, Switch,
+};
 pub use dynamic::{dynamic, Dynamic};
 pub use extras::{divider, vertical_divider};
 pub use image::{icon, image, Image};
@@ -101,8 +104,8 @@ pub use layout::{
 // Re-export the style enums used by the builder API for convenience.
 pub use crate::core::{AlignItems, Dimension, EdgeInsets, FlexWrap, JustifyContent, Position};
 pub use crate::dom::{
-    GesturePhase, ImageResizeMode, KeyboardType, LayoutDirection, LinearGradient, ReturnKeyType,
-    Role, TextAlign, TextStyle, Transform,
+    DatePickerMode, DatePickerStyle, GesturePhase, ImageResizeMode, KeyboardType, LayoutDirection,
+    LinearGradient, ReturnKeyType, Role, TextAlign, TextStyle, Transform,
 };
 
 use crate::dom::{Tree, WidgetId};

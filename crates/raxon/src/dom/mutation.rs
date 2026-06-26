@@ -67,6 +67,9 @@ pub enum WidgetKind {
     /// A -/+ stepper for a bounded numeric value (maps to `UIStepper`); the
     /// current value comes from `FloatValue` and the bounds from `Range`.
     Stepper,
+    /// A native date/time picker (maps to `UIDatePicker`); current value is
+    /// epoch seconds via `DateValue`.
+    DatePicker,
     /// A multi-line editable text area (maps to `UITextView`).
     TextArea,
     /// An absolute-position container — children layer on top of each other (ZStack).
@@ -268,6 +271,30 @@ pub enum KeyboardDismissMode {
     OnDrag,
     /// The keyboard follows the drag gesture interactively.
     Interactive,
+}
+
+/// Date picker display mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DatePickerMode {
+    /// Calendar date only.
+    Date,
+    /// Time of day only.
+    Time,
+    /// Calendar date and time of day.
+    DateTime,
+}
+
+/// Native date picker presentation style.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DatePickerStyle {
+    /// Let the platform choose.
+    Automatic,
+    /// Wheel picker.
+    Wheels,
+    /// Compact field that opens the picker in an overlay.
+    Compact,
+    /// Inline calendar/time controls.
+    Inline,
 }
 
 /// A reference-counted, heap-allocated callback (`Arc<dyn Fn()>`).
@@ -474,6 +501,16 @@ pub enum Attribute {
     Html(String),
     /// Use a dynamic-type text style instead of a fixed font size.
     TextStyle(TextStyle),
+    /// Native date picker mode.
+    DatePickerMode(DatePickerMode),
+    /// Native date picker presentation style.
+    DatePickerStyle(DatePickerStyle),
+    /// Native date picker current value as seconds since the Unix epoch.
+    DateValue(f64),
+    /// Minimum selectable date as seconds since the Unix epoch.
+    DateMin(f64),
+    /// Maximum selectable date as seconds since the Unix epoch.
+    DateMax(f64),
     /// For LazyList: total number of items in the data set.
     ItemCount(usize),
     /// For LazyList: estimated height per item in points.

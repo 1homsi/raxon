@@ -155,6 +155,11 @@ impl Tree {
         self.create(WidgetKind::Stepper)
     }
 
+    /// Creates a native date/time picker.
+    pub fn create_date_picker(&mut self) -> WidgetId {
+        self.create(WidgetKind::DatePicker)
+    }
+
     /// Creates a multi-line editable text area.
     pub fn create_text_area(&mut self) -> WidgetId {
         self.create(WidgetKind::TextArea)

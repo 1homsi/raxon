@@ -17,15 +17,15 @@ use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol};
 use objc2::{class, define_class, msg_send, sel, ClassType, MainThreadMarker, MainThreadOnly};
 use objc2_core_foundation::{CGAffineTransform, CGPoint, CGRect, CGSize};
 use objc2_foundation::{
-    NSData, NSMutableArray, NSNotification, NSNotificationCenter, NSRange, NSString,
+    NSDate, NSData, NSMutableArray, NSNotification, NSNotificationCenter, NSRange, NSString,
 };
 use objc2_quartz_core::{CADisplayLink, CAGradientLayer};
 use objc2_ui_kit::{
     NSTextAlignment, UIActivityIndicatorView, UIApplication, UIApplicationDelegate, UIButton,
     UIButtonType, UIColor, UIControl, UIControlEvents, UIControlState, UIFont, UIGestureRecognizer,
     UIGestureRecognizerState, UIImage, UIImageView, UILabel, UILongPressGestureRecognizer,
-    UIPanGestureRecognizer, UIPinchGestureRecognizer, UIProgressView, UIRotationGestureRecognizer,
-    UIScreen, UIScrollView,
+    UIDatePicker, UIDatePickerMode, UIDatePickerStyle, UIPanGestureRecognizer,
+    UIPinchGestureRecognizer, UIProgressView, UIRotationGestureRecognizer, UIScreen, UIScrollView,
     UISegmentedControl, UISlider, UIStepper, UISwitch, UITapGestureRecognizer, UITextBorderStyle,
     UITextField, UITextInputTraits, UITextView, UITraitEnvironment, UIUserInterfaceStyle, UIView,
     UIViewController, UIWindow,
@@ -440,6 +440,8 @@ define_class!(
                 unsafe { seg.selectedSegmentIndex() as f64 }
             } else if let Some(st) = sender.downcast_ref::<UIStepper>() {
                 unsafe { st.value() }
+            } else if let Some(dp) = sender.downcast_ref::<UIDatePicker>() {
+                unsafe { dp.date().timeIntervalSince1970() }
             } else {
                 0.0
             };
@@ -1270,6 +1272,19 @@ impl Backend for UiKitBackend {
                         }
                         st.into_super().into_super()
                     }
+                    WidgetKind::DatePicker => {
+                        let dp: Retained<UIDatePicker> =
+                            unsafe { UIDatePicker::initWithFrame(self.mtm.alloc(), zero) };
+                        unsafe {
+                            dp.addTarget_action_forControlEvents(
+                                Some(&self.action_target),
+                                sel!(valueChanged:),
+                                UIControlEvents::ValueChanged,
+                            );
+                            dp.setTag(id.to_u64() as isize);
+                        }
+                        dp.into_super().into_super()
+                    }
                     WidgetKind::TextInput => {
                         let field: Retained<UITextField> =
                             unsafe { UITextField::initWithFrame(self.mtm.alloc(), zero) };
@@ -1485,6 +1500,51 @@ impl Backend for UiKitBackend {
                             unsafe { seg.setSelectedSegmentIndex(value as isize) };
                         } else if let Ok(st) = view.clone().downcast::<UIStepper>() {
                             unsafe { st.setValue(value as f64) };
+                        }
+                    }
+                    Attribute::DateValue(epoch_seconds) => {
+                        if let Ok(dp) = view.clone().downcast::<UIDatePicker>() {
+                            let date = unsafe {
+                                NSDate::dateWithTimeIntervalSince1970(epoch_seconds)
+                            };
+                            unsafe { dp.setDate(&date) };
+                        }
+                    }
+                    Attribute::DatePickerMode(mode) => {
+                        if let Ok(dp) = view.clone().downcast::<UIDatePicker>() {
+                            let mode = match mode {
+                                crate::dom::DatePickerMode::Date => UIDatePickerMode::Date,
+                                crate::dom::DatePickerMode::Time => UIDatePickerMode::Time,
+                                crate::dom::DatePickerMode::DateTime => UIDatePickerMode::DateAndTime,
+                            };
+                            unsafe { dp.setDatePickerMode(mode) };
+                        }
+                    }
+                    Attribute::DatePickerStyle(style) => {
+                        if let Ok(dp) = view.clone().downcast::<UIDatePicker>() {
+                            let style = match style {
+                                crate::dom::DatePickerStyle::Automatic => UIDatePickerStyle::Automatic,
+                                crate::dom::DatePickerStyle::Wheels => UIDatePickerStyle::Wheels,
+                                crate::dom::DatePickerStyle::Compact => UIDatePickerStyle::Compact,
+                                crate::dom::DatePickerStyle::Inline => UIDatePickerStyle::Inline,
+                            };
+                            unsafe { dp.setPreferredDatePickerStyle(style) };
+                        }
+                    }
+                    Attribute::DateMin(epoch_seconds) => {
+                        if let Ok(dp) = view.clone().downcast::<UIDatePicker>() {
+                            let date = unsafe {
+                                NSDate::dateWithTimeIntervalSince1970(epoch_seconds)
+                            };
+                            unsafe { dp.setMinimumDate(Some(&date)) };
+                        }
+                    }
+                    Attribute::DateMax(epoch_seconds) => {
+                        if let Ok(dp) = view.clone().downcast::<UIDatePicker>() {
+                            let date = unsafe {
+                                NSDate::dateWithTimeIntervalSince1970(epoch_seconds)
+                            };
+                            unsafe { dp.setMaximumDate(Some(&date)) };
                         }
                     }
                     Attribute::Range { min, max, step } => {

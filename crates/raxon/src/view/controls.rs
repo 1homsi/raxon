@@ -1,8 +1,13 @@
-//! Value controls: `switch`, `slider`, `segmented`, and `stepper`.
+//! Value controls: `switch`, `slider`, `segmented`, `stepper`, and date pickers.
 
-use crate::dom::{Attribute, Event, EventKind, Tree, WidgetId};
+use std::cell::RefCell;
+use std::rc::Rc;
 
-use super::view::View;
+use crate::dom::{Attribute, DatePickerMode, DatePickerStyle, Event, EventKind, Tree, WidgetId};
+use crate::reactive::create_signal;
+
+use super::container::row;
+use super::view::{boxed, View};
 
 /// An on/off switch. Build via [`switch`].
 pub struct Switch<F> {
@@ -154,5 +159,140 @@ impl<F: FnMut(f32) + 'static> View for Stepper<F> {
             }
         });
         id
+    }
+}
+
+/// A native date/time picker backed by platform controls. Build via
+/// [`date_picker`].
+pub struct DatePicker<F> {
+    value: f64,
+    mode: DatePickerMode,
+    style: DatePickerStyle,
+    min: Option<f64>,
+    max: Option<f64>,
+    on_change: F,
+}
+
+/// Creates a native date picker at `value` (seconds since the Unix epoch) that
+/// calls `on_change` with the updated epoch seconds.
+pub fn date_picker<F: FnMut(f64) + 'static>(value: f64, on_change: F) -> DatePicker<F> {
+    DatePicker {
+        value,
+        mode: DatePickerMode::Date,
+        style: DatePickerStyle::Compact,
+        min: None,
+        max: None,
+        on_change,
+    }
+}
+
+impl<F> DatePicker<F> {
+    /// Sets whether the picker edits a date, a time, or both.
+    #[must_use]
+    pub fn mode(mut self, mode: DatePickerMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
+    /// Sets the native picker presentation style.
+    #[must_use]
+    pub fn style(mut self, style: DatePickerStyle) -> Self {
+        self.style = style;
+        self
+    }
+
+    /// Sets the minimum selectable date as seconds since the Unix epoch.
+    #[must_use]
+    pub fn min(mut self, epoch_seconds: f64) -> Self {
+        self.min = Some(epoch_seconds);
+        self
+    }
+
+    /// Sets the maximum selectable date as seconds since the Unix epoch.
+    #[must_use]
+    pub fn max(mut self, epoch_seconds: f64) -> Self {
+        self.max = Some(epoch_seconds);
+        self
+    }
+}
+
+impl<F: FnMut(f64) + 'static> View for DatePicker<F> {
+    fn build(self, tree: &mut Tree) -> WidgetId {
+        let id = tree.create_date_picker();
+        tree.set(id, Attribute::DatePickerMode(self.mode));
+        tree.set(id, Attribute::DatePickerStyle(self.style));
+        if let Some(min) = self.min {
+            tree.set(id, Attribute::DateMin(min));
+        }
+        if let Some(max) = self.max {
+            tree.set(id, Attribute::DateMax(max));
+        }
+        tree.set(id, Attribute::DateValue(self.value));
+        let mut on_change = self.on_change;
+        tree.on(id, EventKind::ValueChanged, move |event| {
+            if let Event::ValueChanged { value, .. } = event {
+                on_change(*value);
+            }
+        });
+        id
+    }
+}
+
+/// Composes two native date pickers into a date range editor. The callback
+/// receives `(start_epoch_seconds, end_epoch_seconds)` whenever either side
+/// changes.
+pub fn date_range_picker<F: FnMut(f64, f64) + 'static>(
+    start: f64,
+    end: f64,
+    on_change: F,
+) -> impl View {
+    let start_signal = create_signal(start);
+    let end_signal = create_signal(end);
+    let on_change = Rc::new(RefCell::new(on_change));
+
+    let on_start = on_change.clone();
+    let start_picker = date_picker(start, move |value| {
+        start_signal.set(value);
+        (on_start.borrow_mut())(value, end_signal.get());
+    });
+
+    let on_end = on_change;
+    let end_picker = date_picker(end, move |value| {
+        end_signal.set(value);
+        (on_end.borrow_mut())(start_signal.get(), value);
+    });
+
+    row((boxed(start_picker), boxed(end_picker))).gap(8.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use crate::dom::{Event, Host, RecordingBackend, Tree};
+    use crate::reactive::create_root;
+    use crate::view::{date_picker, View};
+
+    #[test]
+    fn date_picker_reports_epoch_seconds_on_value_change() {
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let seen_for_handler = seen.clone();
+        let ((mut tree, id), scope) = create_root(|| {
+            let mut tree = Tree::new(Host::new(RecordingBackend::new()));
+            let id = date_picker(1_780_000_000.0, move |value| {
+                seen_for_handler.borrow_mut().push(value);
+            })
+            .build(&mut tree);
+            (tree, id)
+        });
+
+        tree.dispatch(&Event::ValueChanged {
+            target: id,
+            value: 1_780_086_400.0,
+        });
+
+        assert_eq!(&*seen.borrow(), &[1_780_086_400.0]);
+        scope.dispose();
     }
 }

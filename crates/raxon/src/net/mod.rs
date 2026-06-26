@@ -536,6 +536,159 @@ pub fn upload_bytes(url: &str, data: Vec<u8>, content_type: &str) -> Result<Resp
 }
 
 // ---------------------------------------------------------------------------
+// Multipart form-data
+// ---------------------------------------------------------------------------
+
+/// A single part of a [`MultipartForm`].
+#[derive(Clone, Debug, PartialEq)]
+enum Part {
+    /// A plain text field: `(name, value)`.
+    Text { name: String, value: String },
+    /// A file part: `(name, filename, content_type, bytes)`.
+    File {
+        name: String,
+        filename: String,
+        content_type: String,
+        bytes: Vec<u8>,
+    },
+}
+
+/// Builds a `multipart/form-data` request body — the format browsers use for
+/// `<form enctype="multipart/form-data">` and file uploads.
+///
+/// Add text fields with [`field`](MultipartForm::field) and file attachments
+/// with [`file`](MultipartForm::file), then send with [`upload_multipart`] (or
+/// call [`build`](MultipartForm::build) to get the raw `(content_type, body)`
+/// to pass to your own client).
+///
+/// # Example
+/// ```rust,ignore
+/// let form = MultipartForm::new()
+///     .field("title", "My receipt")
+///     .file("receipt", "receipt.jpg", "image/jpeg", jpeg_bytes);
+/// let resp = upload_multipart("https://api.example.com/expenses", form)?;
+/// ```
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MultipartForm {
+    parts: Vec<Part>,
+}
+
+impl MultipartForm {
+    /// Create an empty multipart form.
+    pub fn new() -> Self {
+        MultipartForm { parts: Vec::new() }
+    }
+
+    /// Add a plain text field.
+    #[must_use]
+    pub fn field(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.parts.push(Part::Text {
+            name: name.into(),
+            value: value.into(),
+        });
+        self
+    }
+
+    /// Add a file part with an explicit filename and MIME content type.
+    #[must_use]
+    pub fn file(
+        mut self,
+        name: impl Into<String>,
+        filename: impl Into<String>,
+        content_type: impl Into<String>,
+        bytes: impl Into<Vec<u8>>,
+    ) -> Self {
+        self.parts.push(Part::File {
+            name: name.into(),
+            filename: filename.into(),
+            content_type: content_type.into(),
+            bytes: bytes.into(),
+        });
+        self
+    }
+
+    /// Number of parts (text fields + files) in this form.
+    pub fn len(&self) -> usize {
+        self.parts.len()
+    }
+
+    /// Whether the form has no parts.
+    pub fn is_empty(&self) -> bool {
+        self.parts.is_empty()
+    }
+
+    /// Serialize the form into `(content_type_header, body_bytes)`.
+    ///
+    /// The returned content type includes the generated boundary and should be
+    /// sent verbatim as the `Content-Type` request header.
+    pub fn build(&self) -> (String, Vec<u8>) {
+        let boundary = next_boundary();
+        let mut body: Vec<u8> = Vec::new();
+        for part in &self.parts {
+            body.extend_from_slice(b"--");
+            body.extend_from_slice(boundary.as_bytes());
+            body.extend_from_slice(b"\r\n");
+            match part {
+                Part::Text { name, value } => {
+                    body.extend_from_slice(
+                        format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n")
+                            .as_bytes(),
+                    );
+                    body.extend_from_slice(value.as_bytes());
+                    body.extend_from_slice(b"\r\n");
+                }
+                Part::File {
+                    name,
+                    filename,
+                    content_type,
+                    bytes,
+                } => {
+                    body.extend_from_slice(
+                        format!(
+                            "Content-Disposition: form-data; name=\"{name}\"; filename=\"{filename}\"\r\n"
+                        )
+                        .as_bytes(),
+                    );
+                    body.extend_from_slice(
+                        format!("Content-Type: {content_type}\r\n\r\n").as_bytes(),
+                    );
+                    body.extend_from_slice(bytes);
+                    body.extend_from_slice(b"\r\n");
+                }
+            }
+        }
+        body.extend_from_slice(b"--");
+        body.extend_from_slice(boundary.as_bytes());
+        body.extend_from_slice(b"--\r\n");
+
+        let content_type = format!("multipart/form-data; boundary={boundary}");
+        (content_type, body)
+    }
+}
+
+/// Generates a process-unique multipart boundary string. Uniqueness is
+/// guaranteed within the process via a monotonic counter; collision with body
+/// content is astronomically unlikely thanks to the fixed prefix.
+fn next_boundary() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("----raxonFormBoundary{n:016x}")
+}
+
+/// Uploads a [`MultipartForm`] to `url` via HTTP POST, serializing it with the
+/// correct `Content-Type: multipart/form-data; boundary=…` header.
+///
+/// Registered interceptors are applied before the request is sent.
+///
+/// # Errors
+/// Returns `Err(String)` describing the ureq error on failure.
+pub fn upload_multipart(url: &str, form: MultipartForm) -> Result<Response, String> {
+    let (content_type, body) = form.build();
+    upload_bytes(url, body, &content_type)
+}
+
+// ---------------------------------------------------------------------------
 // Cache-control helpers
 // ---------------------------------------------------------------------------
 

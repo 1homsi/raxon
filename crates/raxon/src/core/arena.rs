@@ -296,7 +296,7 @@ mod tests {
 
         let mut live: Vec<_> = arena.iter().map(|(idx, v)| (idx, *v)).collect();
         live.sort_by_key(|(idx, _)| idx.slot());
-        assert_eq!(live, alloc::vec![(a, "a"), (c, "c")]);
+        assert_eq!(live, std::vec![(a, "a"), (c, "c")]);
     }
 
     #[test]

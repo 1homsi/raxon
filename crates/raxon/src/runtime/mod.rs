@@ -100,6 +100,12 @@ thread_local! {
     /// [`update_keyboard_height`].
     static KEYBOARD_HEIGHT: Cell<Option<Signal<f32>>> = const { Cell::new(None) };
 
+    /// Reactive signal for the platform safe-area insets (notch, status bar,
+    /// home indicator) in logical pixels. Lazily initialised by
+    /// [`use_safe_area_insets`]; updated whenever the backend calls
+    /// [`App::set_safe_area`].
+    static SAFE_AREA_INSETS: Cell<Option<Signal<EdgeInsets>>> = const { Cell::new(None) };
+
     /// Reactive signal for the device's current GPS location. `None` until the
     /// first fix arrives (or if location permission is denied). Lazily
     /// initialised by [`use_location`]; updated by the platform backend via
@@ -629,6 +635,45 @@ pub fn update_keyboard_height(height: f32) {
     });
 }
 
+/// Returns a reactive [`Signal<EdgeInsets>`] holding the platform safe-area
+/// insets — the space taken by the notch, status bar, and home indicator.
+/// Updated automatically whenever the device orientation or chrome changes.
+///
+/// Use this when you need the inset *values* (e.g. to pad a custom header by
+/// the exact top inset); for simply keeping content clear of the unsafe
+/// region, prefer the `safe_area_top` / `safe_area_bottom` / `safe_area_view`
+/// view builders.
+///
+/// Must be called while building views under a running [`App`].
+///
+/// ```no_run
+/// use crate::runtime::use_safe_area_insets;
+///
+/// let insets = use_safe_area_insets();
+/// // insets.get().top → e.g. 47.0 on a notched iPhone
+/// ```
+pub fn use_safe_area_insets() -> Signal<EdgeInsets> {
+    SAFE_AREA_INSETS.with(|slot| {
+        if let Some(sig) = slot.get() {
+            return sig;
+        }
+        let sig = create_signal(EdgeInsets::ZERO);
+        slot.set(Some(sig));
+        sig
+    })
+}
+
+/// Pushes new safe-area insets into the reactive signal exposed by
+/// [`use_safe_area_insets`]. Called from [`App::set_safe_area`]; app code
+/// should not call this directly.
+pub fn update_safe_area_insets(insets: EdgeInsets) {
+    SAFE_AREA_INSETS.with(|slot| {
+        if let Some(sig) = slot.get() {
+            sig.set(insets);
+        }
+    });
+}
+
 /// The fill shown behind the root — i.e. the safe-area region (notch, status
 /// bar, home indicator) that app content does not cover.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -939,6 +984,7 @@ impl App {
     pub fn set_safe_area(&mut self, insets: EdgeInsets) {
         if insets != self.safe_area {
             self.safe_area = insets;
+            update_safe_area_insets(insets);
             self.relayout();
         }
     }

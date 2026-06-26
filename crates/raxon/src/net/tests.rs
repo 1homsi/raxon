@@ -1,7 +1,36 @@
 use crate::async_rt::run_until_stalled;
 use crate::reactive::create_root;
 
-use super::{get, post, set_client, MockClient, Response};
+use super::{get, post, set_client, MockClient, MultipartForm, Response};
+
+#[test]
+fn multipart_serializes_fields_and_files() {
+    let form = MultipartForm::new()
+        .field("title", "Receipt")
+        .file("doc", "a.txt", "text/plain", b"hello".to_vec());
+    assert_eq!(form.len(), 2);
+
+    let (content_type, body) = form.build();
+    assert!(content_type.starts_with("multipart/form-data; boundary="));
+    let boundary = content_type.split("boundary=").nth(1).unwrap();
+
+    let text = String::from_utf8(body).unwrap();
+    // Each part is introduced by the boundary marker.
+    assert_eq!(text.matches(&format!("--{boundary}\r\n")).count(), 2);
+    assert!(text.contains("Content-Disposition: form-data; name=\"title\"\r\n\r\nReceipt\r\n"));
+    assert!(text.contains(
+        "Content-Disposition: form-data; name=\"doc\"; filename=\"a.txt\"\r\nContent-Type: text/plain\r\n\r\nhello\r\n"
+    ));
+    // Closing boundary.
+    assert!(text.ends_with(&format!("--{boundary}--\r\n")));
+}
+
+#[test]
+fn multipart_boundaries_are_unique() {
+    let (ct1, _) = MultipartForm::new().field("a", "1").build();
+    let (ct2, _) = MultipartForm::new().field("a", "1").build();
+    assert_ne!(ct1, ct2, "each build must mint a fresh boundary");
+}
 
 #[test]
 fn get_resolves_with_mock_response() {

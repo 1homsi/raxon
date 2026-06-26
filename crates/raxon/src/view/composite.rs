@@ -2155,3 +2155,336 @@ pub fn accordion(sections: Vec<AccordionSection>) -> impl View {
 
     column(section_views).gap(1.0)
 }
+
+// ---------------------------------------------------------------------------
+// Multi-select list
+// ---------------------------------------------------------------------------
+
+/// A multi-select list: like [`picker`] but lets the user toggle any number of
+/// options on or off. `is_selected(i)` is re-read reactively per row (so checks
+/// update live), and `on_toggle(i)` is called when a row is tapped.
+///
+/// # Example
+/// ```rust
+/// use super::view::multi_select;
+/// use crate::reactive::create_signal;
+///
+/// let chosen = create_signal(std::collections::HashSet::<usize>::new());
+/// let view = multi_select(
+///     vec!["Email".into(), "SMS".into(), "Push".into()],
+///     move |i| chosen.get().contains(&i),
+///     move |i| chosen.update(|s| { if !s.insert(i) { s.remove(&i); } }),
+/// );
+/// ```
+pub fn multi_select(
+    options: Vec<String>,
+    is_selected: impl Fn(usize) -> bool + Clone + 'static,
+    on_toggle: impl Fn(usize) + Clone + 'static,
+) -> impl View {
+    let rows: Vec<BoxedView> = options
+        .into_iter()
+        .enumerate()
+        .map(|(i, label)| {
+            let on_toggle = on_toggle.clone();
+            let is_selected = is_selected.clone();
+            boxed(
+                row((
+                    boxed(text(label).font_size(16.0).grow(1.0)),
+                    boxed(dynamic(move || {
+                        if is_selected(i) {
+                            boxed(
+                                icon("checkmark.circle.fill")
+                                    .tint(DEFAULT_TINT)
+                                    .size(22.0, 22.0),
+                            )
+                        } else {
+                            boxed(
+                                icon("circle")
+                                    .tint(Color::hex(0xC7C7CCff))
+                                    .size(22.0, 22.0),
+                            )
+                        }
+                    })),
+                ))
+                .padding(14.0)
+                .align(AlignItems::Center)
+                .on_tap(move || on_toggle(i)),
+            )
+        })
+        .collect();
+    column(rows).corner_radius(10.0).background(Color::WHITE)
+}
+
+// ---------------------------------------------------------------------------
+// Drag-to-reorder list
+// ---------------------------------------------------------------------------
+
+/// A vertically-stacked list whose rows can be dragged to reorder.
+///
+/// Each row is built by `render(i)`. While a row is dragged it follows the
+/// finger; on release `on_reorder(from, to)` is called with the original and
+/// target indices (a no-op if unchanged). `row_height` translates the drag
+/// distance into a number of slots moved.
+///
+/// # Example
+/// ```rust
+/// use super::view::{reorderable_list, boxed, text};
+///
+/// let view = reorderable_list(
+///     3,
+///     48.0,
+///     |i| boxed(text(format!("Item {i}"))),
+///     |from, to| println!("moved {from} -> {to}"),
+/// );
+/// ```
+pub fn reorderable_list(
+    count: usize,
+    row_height: f32,
+    render: impl Fn(usize) -> BoxedView + 'static,
+    on_reorder: impl Fn(usize, usize) + Clone + 'static,
+) -> impl View {
+    use crate::dom::Transform;
+
+    let dragging = create_signal::<Option<usize>>(None);
+    let drag_dy = create_signal(0.0f32);
+
+    let rows: Vec<BoxedView> = (0..count)
+        .map(|i| {
+            let on_reorder = on_reorder.clone();
+            let content = render(i);
+            boxed(
+                column((content,))
+                    .grow_by(0.0)
+                    .transform_fn(move || {
+                        if dragging.get() == Some(i) {
+                            Transform::IDENTITY.translate(0.0, drag_dy.get())
+                        } else {
+                            Transform::IDENTITY
+                        }
+                    })
+                    .z_index(if dragging.get() == Some(i) { 1 } else { 0 })
+                    .on_pan(move |info: PanInfo| match info.phase {
+                        GesturePhase::Began => {
+                            dragging.set(Some(i));
+                            drag_dy.set(0.0);
+                        }
+                        GesturePhase::Changed => {
+                            drag_dy.set(info.translation.y);
+                        }
+                        GesturePhase::Ended => {
+                            let slots = (info.translation.y / row_height).round() as i64;
+                            let from = i as i64;
+                            let to = (from + slots).clamp(0, count as i64 - 1);
+                            dragging.set(None);
+                            drag_dy.set(0.0);
+                            if to != from {
+                                on_reorder(from as usize, to as usize);
+                            }
+                        }
+                    }),
+            )
+        })
+        .collect();
+    column(rows)
+}
+
+// ---------------------------------------------------------------------------
+// Error boundary
+// ---------------------------------------------------------------------------
+
+/// Wraps `content` and shows `fallback(message)` instead whenever `error`
+/// holds `Some(message)`.
+///
+/// A controllable error boundary: set the signal from a failed
+/// [`Resource`](crate::async_rt::Resource), a `catch_unwind` site, or any error
+/// path to swap the subtree for a recovery UI. Clearing it back to `None`
+/// restores `content`.
+///
+/// # Example
+/// ```rust
+/// use super::view::{error_boundary, boxed, text, button};
+/// use crate::reactive::create_signal;
+///
+/// let err = create_signal::<Option<String>>(None);
+/// let view = error_boundary(
+///     err,
+///     || boxed(text("All good")),
+///     move |msg| boxed(text(format!("Something went wrong: {msg}"))),
+/// );
+/// ```
+pub fn error_boundary(
+    error: Signal<Option<String>>,
+    content: impl Fn() -> BoxedView + 'static,
+    fallback: impl Fn(String) -> BoxedView + 'static,
+) -> impl View {
+    dynamic(move || match error.get() {
+        Some(msg) => fallback(msg),
+        None => content(),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// PDF viewer
+// ---------------------------------------------------------------------------
+
+/// Displays the PDF (or any document the platform web view can render) at `url`
+/// inside an embedded web view. On iOS this is a `WKWebView`, which renders
+/// PDFs natively with pinch-zoom and scrolling.
+///
+/// # Example
+/// ```rust
+/// use super::view::pdf_view;
+///
+/// let view = pdf_view("https://example.com/invoice.pdf");
+/// ```
+pub fn pdf_view(url: impl Into<String>) -> impl View {
+    super::web_view::web_view(url)
+}
+
+// ---------------------------------------------------------------------------
+// Calendar (month grid)
+// ---------------------------------------------------------------------------
+
+/// Number of days in `month` (1–12) of `year`, accounting for leap years.
+fn days_in_month(year: i32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 {
+                29
+            } else {
+                28
+            }
+        }
+        _ => 30,
+    }
+}
+
+/// Day of week for a date, via Sakamoto's algorithm. `0` = Sunday … `6` = Saturday.
+fn weekday(year: i32, month: u32, day: u32) -> u32 {
+    let t = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+    let y = if month < 3 { year - 1 } else { year };
+    let m = month as usize;
+    ((((y + y / 4 - y / 100 + y / 400 + t[m - 1] + day as i32) % 7) + 7) % 7) as u32
+}
+
+/// A month-grid calendar for `year`/`month` (month is 1–12). The currently
+/// selected day is read reactively from `selected`; tapping a day calls
+/// `on_select(day)`. The selected day is highlighted with a filled circle.
+///
+/// This is composed entirely from views — no native calendar widget — so it
+/// renders identically on every backend.
+///
+/// # Example
+/// ```rust
+/// use super::view::calendar;
+/// use crate::reactive::create_signal;
+///
+/// let day = create_signal::<Option<u32>>(Some(15));
+/// let view = calendar(2026, 6, day, move |d| day.set(Some(d)));
+/// ```
+pub fn calendar(
+    year: i32,
+    month: u32,
+    selected: Signal<Option<u32>>,
+    on_select: impl Fn(u32) + Clone + 'static,
+) -> impl View {
+    const WD: [&str; 7] = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+
+    let header = row(WD
+        .iter()
+        .map(|d| {
+            boxed(
+                text(*d)
+                    .font_size(12.0)
+                    .color(Color::hex(0x8E8E93ff))
+                    .align(crate::dom::TextAlign::Center)
+                    .grow(1.0),
+            )
+        })
+        .collect::<Vec<_>>())
+    .gap(2.0);
+
+    let first_wd = weekday(year, month, 1) as usize;
+    let dim = days_in_month(year, month) as usize;
+
+    let mut cells: Vec<Option<u32>> = Vec::new();
+    for _ in 0..first_wd {
+        cells.push(None);
+    }
+    for d in 1..=dim {
+        cells.push(Some(d as u32));
+    }
+    while cells.len() % 7 != 0 {
+        cells.push(None);
+    }
+
+    let mut weeks: Vec<BoxedView> = vec![boxed(header)];
+    for chunk in cells.chunks(7) {
+        let row_cells: Vec<BoxedView> = chunk
+            .iter()
+            .map(|c| match c {
+                Some(d) => {
+                    let d = *d;
+                    let on_select = on_select.clone();
+                    boxed(
+                        column((boxed(
+                            text(format!("{d}"))
+                                .font_size(15.0)
+                                .align(crate::dom::TextAlign::Center)
+                                .text_color_fn(move || {
+                                    if selected.get() == Some(d) {
+                                        Color::WHITE
+                                    } else {
+                                        Color::hex(0x1C1C1Eff)
+                                    }
+                                }),
+                        ),))
+                        .align(AlignItems::Center)
+                        .justify(JustifyContent::Center)
+                        .padding(6.0)
+                        .corner_radius(18.0)
+                        .background_fn(move || {
+                            if selected.get() == Some(d) {
+                                DEFAULT_TINT
+                            } else {
+                                Color::rgba(0, 0, 0, 0)
+                            }
+                        })
+                        .grow(1.0)
+                        .on_tap(move || on_select(d)),
+                    )
+                }
+                None => boxed(column(()).grow_by(1.0)),
+            })
+            .collect();
+        weeks.push(boxed(row(row_cells).gap(2.0)));
+    }
+    column(weeks).gap(6.0)
+}
+
+#[cfg(test)]
+mod date_math_tests {
+    use super::{days_in_month, weekday};
+
+    #[test]
+    fn days_in_month_handles_leap_years() {
+        assert_eq!(days_in_month(2026, 1), 31);
+        assert_eq!(days_in_month(2026, 2), 28); // not a leap year
+        assert_eq!(days_in_month(2024, 2), 29); // leap year
+        assert_eq!(days_in_month(2000, 2), 29); // divisible by 400
+        assert_eq!(days_in_month(1900, 2), 28); // divisible by 100 not 400
+        assert_eq!(days_in_month(2026, 4), 30);
+    }
+
+    #[test]
+    fn weekday_matches_known_dates() {
+        // 2026-06-01 is a Monday (1).
+        assert_eq!(weekday(2026, 6, 1), 1);
+        // 2000-01-01 was a Saturday (6).
+        assert_eq!(weekday(2000, 1, 1), 6);
+        // 2024-02-29 was a Thursday (4).
+        assert_eq!(weekday(2024, 2, 29), 4);
+    }
+}

@@ -60,13 +60,14 @@ pub use map::{map_view, MapView};
 pub use camera::{camera_scanner, CameraScanner};
 pub use composite::{
     accordion, action_sheet, alert, app_bar, avatar, badge, banner, backdrop, bottom_sheet,
-    breadcrumbs, card, carousel, checkbox, chip, collapsible, color_picker, dev_tools, drawer,
-    empty_state, error_overlay, fade_transition, grid, infinite_scroll, item_separator,
-    keyboard_avoiding_view, lazy_column, lazy_row, list_with_header, modal, network_image,
-    pan_animation, picker, pressable, radio, rating_bar, reactive_list, search_bar, section_list,
-    segmented_control, skeleton, status_bar, status_bar_spacer, sticky_header, swipe_actions,
-    tab_bar, toast, tooltip, wrap, AccordionSection, Avatar, Badge, BannerKind, Card, Checkbox,
-    Chip, Radio, Section, Skeleton, TabItem,
+    breadcrumbs, calendar, card, carousel, checkbox, chip, collapsible, color_picker, dev_tools,
+    drawer, empty_state, error_boundary, error_overlay, fade_transition, grid, infinite_scroll,
+    item_separator, keyboard_avoiding_view, lazy_column, lazy_row, list_with_header, modal,
+    multi_select, network_image, pan_animation, pdf_view, picker, pressable, radio, rating_bar,
+    reactive_list, reorderable_list, search_bar, section_list, segmented_control, skeleton,
+    status_bar, status_bar_spacer, sticky_header, swipe_actions, tab_bar, toast, tooltip, wrap,
+    AccordionSection, Avatar, Badge, BannerKind, Card, Checkbox, Chip, Radio, Section, Skeleton,
+    TabItem,
 };
 pub use web_view::{web_view, web_view_html, WebView};
 pub use container::{column, row, stack, Container, Stack};

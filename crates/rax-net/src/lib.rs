@@ -990,5 +990,68 @@ pub fn download_with_progress(
     })
 }
 
+// ---------------------------------------------------------------------------
+// Image cache — in-memory URL-keyed byte store
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    static IMAGE_CACHE: RefCell<HashMap<String, Vec<u8>>> = RefCell::new(HashMap::new());
+}
+
+/// Cache raw bytes under a URL key.
+///
+/// Subsequent [`fetch_image`] calls with the same URL return the cached bytes
+/// without hitting the network.
+pub fn cache_image(url: &str, data: Vec<u8>) {
+    IMAGE_CACHE.with(|c| {
+        c.borrow_mut().insert(url.to_string(), data);
+    });
+}
+
+/// Retrieve cached bytes for a URL, or `None` if not yet cached.
+pub fn get_cached_image(url: &str) -> Option<Vec<u8>> {
+    IMAGE_CACHE.with(|c| c.borrow().get(url).cloned())
+}
+
+/// Clear all cached images, freeing their memory.
+pub fn clear_image_cache() {
+    IMAGE_CACHE.with(|c| c.borrow_mut().clear());
+}
+
+/// Download and cache an image, returning the raw bytes.
+///
+/// If the URL is already present in the in-memory cache the cached bytes are
+/// returned immediately without making a network request. Otherwise a
+/// synchronous HTTP GET is performed via `ureq`, the response bytes are stored
+/// in the cache, and the same bytes are returned to the caller.
+///
+/// # Errors
+/// Returns `Err(String)` if the network request fails.
+///
+/// # Example
+/// ```rust,ignore
+/// use rax_net::fetch_image;
+///
+/// let bytes = fetch_image("https://example.com/photo.jpg")?;
+/// println!("downloaded {} bytes", bytes.len());
+/// // Second call: cache hit, no network request.
+/// let bytes2 = fetch_image("https://example.com/photo.jpg")?;
+/// assert_eq!(bytes, bytes2);
+/// ```
+pub fn fetch_image(url: &str) -> Result<Vec<u8>, String> {
+    if let Some(data) = get_cached_image(url) {
+        return Ok(data);
+    }
+    let response = ureq::get(url).call().map_err(|e| e.to_string())?;
+    let mut bytes = Vec::new();
+    use std::io::Read;
+    response
+        .into_reader()
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    cache_image(url, bytes.clone());
+    Ok(bytes)
+}
+
 #[cfg(test)]
 mod tests;

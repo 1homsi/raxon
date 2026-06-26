@@ -43,6 +43,7 @@
 
 #![forbid(unsafe_code)]
 
+mod async_derived;
 mod context;
 mod control;
 mod effect;
@@ -50,9 +51,11 @@ mod handle;
 mod history;
 mod middleware;
 mod persisted;
+mod reducer;
 mod runtime;
 mod store;
 
+pub use async_derived::{create_async_derived, create_deferred, AsyncState};
 pub use context::{expect_context, provide_context, use_context};
 pub use control::{batch, untrack};
 pub use effect::{create_effect, Effect};
@@ -64,5 +67,9 @@ pub use persisted::{
     persisted_bool, persisted_f64, persisted_i64, persisted_signal,
     KvNamespace,
 };
+pub use reducer::{use_reducer, Reducer, ReducerStore};
 pub use runtime::{create_root, Runtime, Scope};
 pub use store::Store;
+
+// Alias for discoverability
+pub use control::batch as transaction;

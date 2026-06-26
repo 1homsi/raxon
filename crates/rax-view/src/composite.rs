@@ -1841,6 +1841,93 @@ pub fn tooltip<V: View + 'static>(content: V, message: &'static str) -> impl Vie
 }
 
 // ---------------------------------------------------------------------------
+// ColorPicker — palette of common color swatches
+// ---------------------------------------------------------------------------
+
+/// A simple color picker that displays a row of colour swatches.
+///
+/// Tapping a swatch writes the corresponding [`Color`] into `color`. `label`
+/// is rendered above the palette row.
+///
+/// # Example
+/// ```rust
+/// use rax_view::color_picker;
+/// use rax_reactive::create_signal;
+/// use rax_core::Color;
+///
+/// let color = create_signal(Color::hex(0xFF0000ff));
+/// let v = color_picker(color, "Pick a color");
+/// ```
+pub fn color_picker(color: Signal<Color>, label: &'static str) -> impl View {
+    let palette: &[u32] = &[
+        0xFF0000ff, 0xFF6600ff, 0xFFCC00ff, 0x66CC00ff, 0x00CC66ff,
+        0x0066FFff, 0x6600FFff, 0xFF00CCff, 0xFFFFFFff, 0x888888ff, 0x000000ff,
+    ];
+    let swatches: Vec<BoxedView> = palette
+        .iter()
+        .copied()
+        .map(|c| {
+            let col = Color::hex(c);
+            boxed(
+                column(())
+                    .width(32.0)
+                    .height(32.0)
+                    .background(col)
+                    .corner_radius(16.0)
+                    .border(1.0, Color::hex(0xCCCCCCff))
+                    .on_tap(move || color.set(col)),
+            )
+        })
+        .collect();
+
+    column((
+        boxed(text(label).font_size(14.0)),
+        boxed(row(swatches).gap(8.0).wrap()),
+    ))
+    .gap(8.0)
+}
+
+// ---------------------------------------------------------------------------
+// RatingBar — star-based value input
+// ---------------------------------------------------------------------------
+
+/// A star-rating bar that allows the user to pick a value between `1` and `max`.
+///
+/// `value` holds the current rating (as a `f32` so fractional ratings are
+/// representable). Tapping star `i` calls `on_change(i as f32)`.
+///
+/// # Example
+/// ```rust
+/// use rax_view::rating_bar;
+/// use rax_reactive::create_signal;
+///
+/// let rating = create_signal(3.0f32);
+/// let v = rating_bar(rating, 5, move |v| rating.set(v));
+/// ```
+pub fn rating_bar(
+    value: Signal<f32>,
+    max: u32,
+    on_change: impl Fn(f32) + 'static + Clone,
+) -> impl View {
+    let stars: Vec<BoxedView> = (1..=max)
+        .map(|i| {
+            let on_change = on_change.clone();
+            let val = value;
+            let fi = i as f32;
+            boxed(
+                boxed(dynamic(move || {
+                    let v = val.get();
+                    let star = if v >= fi { "★" } else { "☆" };
+                    boxed(text(star).font_size(28.0).color(Color::hex(0xFFCC00ff)))
+                }))
+                .on_tap(move || on_change(fi)),
+            )
+        })
+        .collect();
+    row(stars).gap(4.0)
+}
+
+// ---------------------------------------------------------------------------
 // StatusBar
 // ---------------------------------------------------------------------------
 

@@ -15,6 +15,41 @@
 use rusqlite::{params_from_iter, types::ToSql, Connection};
 use std::path::Path;
 
+/// A reactive query that re-runs when `invalidate()` is called.
+/// Returns a Signal<Vec<T>> that updates reactively.
+#[derive(Clone, Copy)]
+pub struct ReactiveQuery<T: Clone + 'static> {
+    result: rax_reactive::Signal<Vec<T>>,
+    // Invalidation token — increment to trigger re-run
+    version: rax_reactive::Signal<u64>,
+}
+
+impl<T: Clone + 'static> ReactiveQuery<T> {
+    /// Invalidate the cache — triggers a re-fetch on the next reactive read.
+    pub fn invalidate(&self) {
+        self.version.update(|v| *v += 1);
+    }
+
+    /// Access results reactively.
+    pub fn get(&self) -> Vec<T> {
+        self.result.get()
+    }
+
+    /// Re-run the query now and update the signal.
+    pub fn refresh<F: Fn() -> Vec<T>>(&self, fetch: F) {
+        self.result.update(|r| *r = fetch());
+    }
+}
+
+/// Create a reactive query seeded with `initial_results`.
+pub fn use_reactive_query<T: Clone + 'static>(initial_results: Vec<T>) -> ReactiveQuery<T> {
+    use rax_reactive::create_signal;
+    ReactiveQuery {
+        result: create_signal(initial_results),
+        version: create_signal(0u64),
+    }
+}
+
 /// A SQLite database connection.
 pub struct Database {
     conn: Connection,

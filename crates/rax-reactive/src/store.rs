@@ -55,6 +55,21 @@ impl<S: Clone + 'static> Store<S> {
     }
 }
 
+impl<S: Clone + PartialEq + 'static> Store<S> {
+    /// Apply an optimistic update, returning a rollback closure.
+    ///
+    /// Call the returned closure to revert if the server confirms failure.
+    pub fn optimistic_update<F>(&self, mutate: F) -> impl Fn()
+    where
+        F: Fn(&mut S),
+    {
+        let saved = self.signal.get();
+        self.signal.update(|s| mutate(s));
+        let rollback_sig = self.signal;
+        move || rollback_sig.set(saved.clone())
+    }
+}
+
 impl<S: Clone + 'static> Copy for Store<S> {}
 impl<S: Clone + 'static> Clone for Store<S> {
     fn clone(&self) -> Self {

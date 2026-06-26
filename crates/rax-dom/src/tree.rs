@@ -310,6 +310,24 @@ impl Tree {
         self.host.emit(Mutation::SetAppBadge { count });
     }
 
+    /// Programmatically scrolls a scroll view to the given content offset.
+    ///
+    /// iOS: calls `[UIScrollView setContentOffset:animated:]`.
+    pub fn scroll_to(&mut self, id: WidgetId, offset_x: f32, offset_y: f32, animated: bool) {
+        if self.nodes.get(id.0).is_some() {
+            self.host.emit(Mutation::ScrollTo { id, offset_x, offset_y, animated });
+        }
+    }
+
+    /// Programmatically scrolls a scroll view back to the top (offset 0, 0).
+    ///
+    /// iOS: calls `[UIScrollView setContentOffset:{0,0} animated:]`.
+    pub fn scroll_to_top(&mut self, id: WidgetId, animated: bool) {
+        if self.nodes.get(id.0).is_some() {
+            self.host.emit(Mutation::ScrollToTop { id, animated });
+        }
+    }
+
     fn create(&mut self, kind: WidgetKind) -> WidgetId {
         let index = self.nodes.insert(ElementNode {
             kind,

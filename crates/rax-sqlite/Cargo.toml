@@ -12,3 +12,4 @@ missing_docs = "warn"
 
 [dependencies]
 rusqlite = { version = "0.31", features = ["bundled"] }
+rax-reactive = { path = "../rax-reactive" }

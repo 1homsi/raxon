@@ -36,8 +36,10 @@ pub use event::{
     Event, EventKind, EventSink, GesturePhase, Lifecycle, PointerId, TextSelection,
 };
 pub use mutation::{
-    Attribute, Callback, CursorStyle, FontStyle, GestureKind, HapticStyle, KeyboardType, LayoutDirection,
-    LinearGradient, LocalNotification, Mutation, ReturnKeyType, Role, Shadow, StatusBarStyle,
-    SwipeDirection, TextAlign, TextDecoration, TextSpan, TextStyle, Transform, WidgetId, WidgetKind,
+    Attribute, Callback, CursorStyle, FontStyle, GestureKind, HapticStyle, ImageErrorCallback,
+    ImageLoadCallback, ImageResizeMode, KeyboardDismissMode, KeyboardType, LayoutDirection,
+    LinearGradient, LocalNotification, Mutation, ReturnKeyType, Role, ScrollCallback, ScrollInfo,
+    Shadow, StatusBarStyle, SwipeDirection, TextAlign, TextDecoration, TextSpan, TextStyle,
+    Transform, WidgetId, WidgetKind,
 };
 pub use tree::{BuildThunk, Tree};

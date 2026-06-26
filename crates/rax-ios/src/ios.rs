@@ -1570,6 +1570,27 @@ impl Backend for UiKitBackend {
                             }
                         }
                     }
+                    Attribute::ImageResizeMode(mode) => {
+                        // UIViewContentMode raw values:
+                        //   ScaleToFill = 0, ScaleAspectFit = 2, ScaleAspectFill = 1,
+                        //   Center = 4
+                        let content_mode: isize = match mode {
+                            rax_dom::ImageResizeMode::Stretch => 0,
+                            rax_dom::ImageResizeMode::Cover   => 1,
+                            rax_dom::ImageResizeMode::Contain => 2,
+                            rax_dom::ImageResizeMode::Center  => 4,
+                            rax_dom::ImageResizeMode::Repeat  => 0, // stub; tiling needs CALayer
+                        };
+                        unsafe {
+                            let _: () = msg_send![&*view, setContentMode: content_mode];
+                        }
+                    }
+                    Attribute::ImageOnLoad(_cb) => {
+                        // TODO: wire up via network image observer pattern
+                    }
+                    Attribute::ImageOnError(_cb) => {
+                        // TODO: wire up via network image observer pattern
+                    }
                     Attribute::Horizontal(horiz) => {
                         if let Ok(sv) = view.clone().downcast::<UIScrollView>() {
                             unsafe {
@@ -1642,6 +1663,34 @@ impl Backend for UiKitBackend {
                                 // when the binding stabilises. For now we record the values so
                                 // the attribute round-trips correctly through the mutation stream.
                                 let _ = (sv, insets);
+                            }
+                        }
+                    }
+                    Attribute::OnScrollChange(_cb) => {
+                        // TODO: wire up UIScrollViewDelegate scrollViewDidScroll:
+                        // to call cb.call(ScrollInfo { offset_x, offset_y, velocity_x, velocity_y }).
+                        let _ = view;
+                    }
+                    Attribute::OnScrollBegin(_cb) => {
+                        // TODO: wire up UIScrollViewDelegate scrollViewWillBeginDragging:
+                        // to call cb.call().
+                        let _ = view;
+                    }
+                    Attribute::OnScrollEnd(_cb) => {
+                        // TODO: wire up UIScrollViewDelegate scrollViewDidEndDecelerating:
+                        // and scrollViewDidEndDragging:willDecelerate: (when not decelerating)
+                        // to call cb.call().
+                        let _ = view;
+                    }
+                    Attribute::KeyboardDismissMode(mode) => {
+                        if let Ok(sv) = view.clone().downcast::<UIScrollView>() {
+                            unsafe {
+                                let v: isize = match mode {
+                                    rax_dom::KeyboardDismissMode::None => 0,
+                                    rax_dom::KeyboardDismissMode::OnDrag => 1,
+                                    rax_dom::KeyboardDismissMode::Interactive => 2,
+                                };
+                                let _: () = msg_send![&*sv, setKeyboardDismissMode: v];
                             }
                         }
                     }
@@ -2949,6 +2998,27 @@ impl Backend for UiKitBackend {
             Mutation::SetAppBadge { count } => {
                 // TODO: set [[UIApplication sharedApplication] applicationIconBadgeNumber]
                 let _ = count;
+            }
+            Mutation::ScrollTo { id, offset_x, offset_y, animated } => {
+                if let Some(view) = self.views.get(&id.to_u64()) {
+                    if let Ok(sv) = view.clone().downcast::<UIScrollView>() {
+                        unsafe {
+                            // CGPoint layout: {x: CGFloat, y: CGFloat}
+                            let point: [f64; 2] = [offset_x as f64, offset_y as f64];
+                            let _: () = msg_send![&*sv, setContentOffset: point animated: animated];
+                        }
+                    }
+                }
+            }
+            Mutation::ScrollToTop { id, animated } => {
+                if let Some(view) = self.views.get(&id.to_u64()) {
+                    if let Ok(sv) = view.clone().downcast::<UIScrollView>() {
+                        unsafe {
+                            let point: [f64; 2] = [0.0_f64, 0.0_f64];
+                            let _: () = msg_send![&*sv, setContentOffset: point animated: animated];
+                        }
+                    }
+                }
             }
         }
     }

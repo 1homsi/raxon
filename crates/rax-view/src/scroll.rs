@@ -1,8 +1,10 @@
 //! The `scroll` view: a scrolling container (vertical or horizontal),
 //! optionally with pull-to-refresh.
 
+use std::sync::Arc;
+
 use rax_core::{FlexDirection, LayoutStyle};
-use rax_dom::{Attribute, Event, EventKind, Tree, WidgetId};
+use rax_dom::{Attribute, Callback, Event, EventKind, KeyboardDismissMode, ScrollCallback, ScrollInfo, Tree, WidgetId};
 
 use crate::view::View;
 
@@ -18,6 +20,10 @@ pub struct Scroll<V> {
     shows_indicator: Option<bool>,
     paging: bool,
     content_inset: Option<(f32, f32, f32, f32)>,
+    on_scroll: Option<ScrollCallback>,
+    on_scroll_begin: Option<Callback>,
+    on_scroll_end: Option<Callback>,
+    keyboard_dismiss_mode: Option<KeyboardDismissMode>,
 }
 
 /// Wraps `child` in a vertically-scrolling container that fills its parent.
@@ -32,6 +38,10 @@ pub fn scroll<V: View>(child: V) -> Scroll<V> {
         shows_indicator: None,
         paging: false,
         content_inset: None,
+        on_scroll: None,
+        on_scroll_begin: None,
+        on_scroll_end: None,
+        keyboard_dismiss_mode: None,
     }
 }
 
@@ -87,6 +97,36 @@ impl<V: View> Scroll<V> {
         self.content_inset = Some((top, right, bottom, left));
         self
     }
+
+    /// Register a callback that fires continuously while the user scrolls,
+    /// reporting the current content offset and estimated velocity.
+    #[must_use]
+    pub fn on_scroll(mut self, f: impl Fn(ScrollInfo) + Send + Sync + 'static) -> Self {
+        self.on_scroll = Some(ScrollCallback(Arc::new(f)));
+        self
+    }
+
+    /// Register a callback that fires when the user begins dragging the scroll view.
+    #[must_use]
+    pub fn on_scroll_begin(mut self, f: impl Fn() + Send + Sync + 'static) -> Self {
+        self.on_scroll_begin = Some(Callback(Arc::new(f)));
+        self
+    }
+
+    /// Register a callback that fires when the scroll view comes to rest.
+    #[must_use]
+    pub fn on_scroll_end(mut self, f: impl Fn() + Send + Sync + 'static) -> Self {
+        self.on_scroll_end = Some(Callback(Arc::new(f)));
+        self
+    }
+
+    /// Set how the keyboard is dismissed when the user drags this scroll view.
+    /// Maps to `UIScrollView.keyboardDismissMode` on iOS.
+    #[must_use]
+    pub fn keyboard_dismiss_mode(mut self, mode: KeyboardDismissMode) -> Self {
+        self.keyboard_dismiss_mode = Some(mode);
+        self
+    }
 }
 
 impl<V: View> View for Scroll<V> {
@@ -129,6 +169,18 @@ impl<V: View> View for Scroll<V> {
         }
         if let Some((top, right, bottom, left)) = self.content_inset {
             tree.set(id, Attribute::ContentInset { top, right, bottom, left });
+        }
+        if let Some(cb) = self.on_scroll {
+            tree.set(id, Attribute::OnScrollChange(cb));
+        }
+        if let Some(cb) = self.on_scroll_begin {
+            tree.set(id, Attribute::OnScrollBegin(cb));
+        }
+        if let Some(cb) = self.on_scroll_end {
+            tree.set(id, Attribute::OnScrollEnd(cb));
+        }
+        if let Some(mode) = self.keyboard_dismiss_mode {
+            tree.set(id, Attribute::KeyboardDismissMode(mode));
         }
         let child = self.child.build(tree);
         tree.append(id, child);

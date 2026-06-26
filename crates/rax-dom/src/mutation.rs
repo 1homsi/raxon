@@ -7,6 +7,8 @@
 //! the whole framework testable with zero platform code (assert on the stream)
 //! and is the seam that later allows diffing off the main thread.
 
+use std::sync::Arc;
+
 use rax_core::{Color, Index, Rect, Size};
 
 /// A stable handle to a node in the retained element tree (and, 1:1, to a native
@@ -242,6 +244,32 @@ pub enum CursorStyle {
     Grab,
 }
 
+/// Scroll position and velocity reported by `OnScrollChange`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScrollInfo {
+    /// Horizontal content offset in points.
+    pub offset_x: f32,
+    /// Vertical content offset in points.
+    pub offset_y: f32,
+    /// Horizontal scroll velocity in points per second.
+    pub velocity_x: f32,
+    /// Vertical scroll velocity in points per second.
+    pub velocity_y: f32,
+}
+
+/// Controls how the keyboard is dismissed when the user drags a scroll view.
+///
+/// Maps to `UIScrollView.keyboardDismissMode` on iOS.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyboardDismissMode {
+    /// The keyboard is not dismissed automatically (default).
+    None,
+    /// The keyboard is dismissed when a drag begins.
+    OnDrag,
+    /// The keyboard follows the drag gesture interactively.
+    Interactive,
+}
+
 /// A reference-counted, heap-allocated callback (`Arc<dyn Fn()>`).
 ///
 /// Implements `Clone` by cloning the `Arc` (cheap reference count bump) and
@@ -267,6 +295,85 @@ impl std::fmt::Debug for Callback {
 impl PartialEq for Callback {
     fn eq(&self, other: &Self) -> bool {
         std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+/// A reference-counted callback that receives a [`ScrollInfo`] value.
+///
+/// `Clone` bumps the `Arc` reference count; `PartialEq` compares by pointer
+/// identity (so any re-setting always triggers a re-render). `Debug` formats
+/// as `"<scroll_callback>"`.
+#[derive(Clone)]
+pub struct ScrollCallback(pub Arc<dyn Fn(ScrollInfo) + Send + Sync>);
+
+impl ScrollCallback {
+    /// Call the wrapped function with the given scroll info.
+    pub fn call(&self, info: ScrollInfo) {
+        (self.0)(info);
+    }
+}
+
+impl std::fmt::Debug for ScrollCallback {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<scroll_callback>")
+    }
+}
+
+impl PartialEq for ScrollCallback {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+/// A reference-counted callback fired when an image loads successfully.
+///
+/// `Clone` bumps the `Arc` reference count; `PartialEq` compares by pointer
+/// identity.
+#[derive(Clone)]
+pub struct ImageLoadCallback(pub Arc<dyn Fn() + Send + Sync>);
+
+impl ImageLoadCallback {
+    /// Call the wrapped function.
+    pub fn call(&self) {
+        (self.0)();
+    }
+}
+
+impl std::fmt::Debug for ImageLoadCallback {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<image_load_callback>")
+    }
+}
+
+impl PartialEq for ImageLoadCallback {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+/// A reference-counted callback fired when an image fails to load.
+///
+/// The argument is a short error description. `Clone` bumps the `Arc`
+/// reference count; `PartialEq` compares by pointer identity.
+#[derive(Clone)]
+pub struct ImageErrorCallback(pub Arc<dyn Fn(String) + Send + Sync>);
+
+impl ImageErrorCallback {
+    /// Call the wrapped function with the given error message.
+    pub fn call(&self, error: String) {
+        (self.0)(error);
+    }
+}
+
+impl std::fmt::Debug for ImageErrorCallback {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<image_error_callback>")
+    }
+}
+
+impl PartialEq for ImageErrorCallback {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
     }
 }
 
@@ -517,6 +624,44 @@ pub enum Attribute {
     /// A string read by VoiceOver as the element's current value (e.g. "50%"
     /// for a progress indicator). Maps to `accessibilityValue` on iOS.
     AccessibilityValueString(String),
+    /// Fires continuously while the user scrolls a scroll view, reporting
+    /// the current offset and estimated velocity.
+    OnScrollChange(ScrollCallback),
+    /// Fires when the user begins dragging a scroll view.
+    OnScrollBegin(Callback),
+    /// Fires when the scroll view comes to rest after scrolling.
+    OnScrollEnd(Callback),
+    /// How the keyboard is dismissed when the user drags a scroll view.
+    /// Maps to `UIScrollView.keyboardDismissMode` on iOS.
+    KeyboardDismissMode(KeyboardDismissMode),
+    /// How the image view scales/positions its content to fit its bounds.
+    /// Maps to `UIView.contentMode` on iOS.
+    ImageResizeMode(ImageResizeMode),
+    /// Fired when the image view successfully loads its image.
+    /// iOS: stub (TODO: wire up via image-load observer pattern).
+    ImageOnLoad(ImageLoadCallback),
+    /// Fired when the image view fails to load its image.
+    /// The `String` argument carries a short error description.
+    /// iOS: stub (TODO: wire up via image-load observer pattern).
+    ImageOnError(ImageErrorCallback),
+}
+
+/// How an image view scales/positions its content to fit its bounds.
+///
+/// Maps to `UIView.contentMode` on iOS.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageResizeMode {
+    /// Scale to fill, clipping excess (UIViewContentModeScaleAspectFill = 1).
+    Cover,
+    /// Scale to fit, letter-boxing if needed (UIViewContentModeScaleAspectFit = 2).
+    Contain,
+    /// Scale to fill the bounds exactly, ignoring aspect ratio
+    /// (UIViewContentModeScaleToFill = 0).
+    Stretch,
+    /// Center without scaling (UIViewContentModeCenter = 4).
+    Center,
+    /// Tile the image (stub; actual tiling requires a CALayer pattern fill).
+    Repeat,
 }
 
 /// The visual style of the iOS status bar.
@@ -939,5 +1084,25 @@ pub enum Mutation {
     SetAppBadge {
         /// The badge count to display (0 clears the badge).
         count: u32,
+    },
+    /// Programmatically scroll a scroll view to the given content offset.
+    /// iOS: `[UIScrollView setContentOffset:animated:]`.
+    ScrollTo {
+        /// The scroll view widget to scroll.
+        id: WidgetId,
+        /// Horizontal content offset in points.
+        offset_x: f32,
+        /// Vertical content offset in points.
+        offset_y: f32,
+        /// Whether to animate the scroll.
+        animated: bool,
+    },
+    /// Programmatically scroll a scroll view back to the top (offset 0, 0).
+    /// iOS: `[UIScrollView setContentOffset:{0,0} animated:]`.
+    ScrollToTop {
+        /// The scroll view widget to scroll.
+        id: WidgetId,
+        /// Whether to animate the scroll.
+        animated: bool,
     },
 }

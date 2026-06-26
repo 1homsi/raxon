@@ -832,5 +832,163 @@ pub fn connect_sse(
     })
 }
 
+// ---------------------------------------------------------------------------
+// Typed JSON helpers
+// ---------------------------------------------------------------------------
+
+impl Response {
+    /// Attempt to deserialize the response body as the JSON type `T`.
+    ///
+    /// Returns `Err` when the body is not valid JSON or does not match the
+    /// expected shape.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// #[derive(serde::Deserialize)]
+    /// struct User { id: u32, name: String }
+    ///
+    /// let resp = get_with_config("https://api.example.com/user/1", Default::default())?;
+    /// let user: User = resp.json()?;
+    /// ```
+    pub fn json<T: serde::de::DeserializeOwned>(&self) -> Result<T, String> {
+        serde_json::from_str(&self.body).map_err(|e| e.to_string())
+    }
+
+    /// Parse the response body as a generic JSON value.
+    ///
+    /// Useful when the schema is unknown or varies at runtime.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let val = resp.json_value()?;
+    /// println!("{}", val["name"]);
+    /// ```
+    pub fn json_value(&self) -> Result<serde_json::Value, String> {
+        serde_json::from_str(&self.body).map_err(|e| e.to_string())
+    }
+}
+
+/// Deserialize a JSON response body into `T`.
+///
+/// Equivalent to [`Response::json`]; provided as a free function for
+/// situations where a reference is more convenient than a method call.
+///
+/// # Errors
+/// Returns `Err(String)` if parsing fails.
+pub fn parse_json<T: serde::de::DeserializeOwned>(response: &Response) -> Result<T, String> {
+    response.json()
+}
+
+/// Performs a GET request and deserializes the response body as the JSON
+/// type `T`, returning a reactive [`Resource<T>`].
+///
+/// # Example
+/// ```rust,ignore
+/// use rax_reactive::create_root;
+/// use rax_net::{get_json, set_client, MockClient, Response};
+///
+/// #[derive(Clone, serde::Deserialize)]
+/// struct Item { id: u32 }
+///
+/// set_client(MockClient::new(|_| Ok(Response::ok(r#"{"id":1}"#))));
+/// let (res, _scope) = create_root(|| get_json::<Item>("https://api.example.com/item/1"));
+/// ```
+pub fn get_json<T: serde::de::DeserializeOwned + Clone + 'static>(
+    url: impl Into<String>,
+) -> rax_async::Resource<T> {
+    let url = url.into();
+    let future = async move {
+        let resp = CLIENT.with(|c| c.borrow().send(Request::get(&url)));
+        let resp = resp.await?;
+        resp.json::<T>()
+    };
+    create_resource(Box::pin(future))
+}
+
+// ---------------------------------------------------------------------------
+// Streaming download with progress reporting
+// ---------------------------------------------------------------------------
+
+/// Snapshot of a download's progress at a point in time.
+#[derive(Clone, Copy, Debug)]
+pub struct DownloadProgress {
+    /// Number of bytes received so far.
+    pub bytes_received: u64,
+    /// Total expected size, if the server supplied a `Content-Length` header.
+    pub total_bytes: Option<u64>,
+    /// Fraction of the download completed (`0.0`–`1.0`), or `None` when
+    /// `total_bytes` is unknown.
+    pub fraction: Option<f64>,
+}
+
+/// Downloads the resource at `url`, calling `on_progress` after each chunk is
+/// received, and returns the complete [`Response`] when the download finishes.
+///
+/// The `on_progress` callback is called from the calling thread (no background
+/// spawning), so it blocks until the download completes. If you need
+/// non-blocking behaviour, call this from a `std::thread::spawn` closure.
+///
+/// Registered interceptors are applied to the URL and headers before the
+/// request is sent.
+///
+/// # Errors
+/// Returns `Err(String)` if the connection or read fails.
+///
+/// # Example
+/// ```rust,ignore
+/// use rax_net::{download_with_progress, DownloadProgress};
+///
+/// let response = download_with_progress("https://example.com/file.bin", |p| {
+///     if let Some(f) = p.fraction {
+///         println!("{:.1}%", f * 100.0);
+///     }
+/// })?;
+/// assert!(response.is_success());
+/// ```
+pub fn download_with_progress(
+    url: &str,
+    on_progress: impl Fn(DownloadProgress) + Send + 'static,
+) -> Result<Response, String> {
+    let mut effective_url = url.to_string();
+    let mut headers: Vec<(String, String)> = vec![];
+    apply_interceptors(&mut effective_url, &mut headers);
+
+    let mut req = ureq::get(&effective_url);
+    for (k, v) in &headers {
+        req = req.set(k, v);
+    }
+
+    let response = req.call().map_err(|e| e.to_string())?;
+    let total = response
+        .header("content-length")
+        .and_then(|s| s.parse::<u64>().ok());
+    let status = response.status();
+
+    let mut reader = response.into_reader();
+    let mut bytes: Vec<u8> = Vec::new();
+    let mut buf = [0u8; 8192];
+
+    loop {
+        use std::io::Read;
+        let n = reader.read(&mut buf).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&buf[..n]);
+        on_progress(DownloadProgress {
+            bytes_received: bytes.len() as u64,
+            total_bytes: total,
+            fraction: total.map(|t| bytes.len() as f64 / t as f64),
+        });
+    }
+
+    let body = String::from_utf8_lossy(&bytes).into_owned();
+    Ok(Response {
+        status,
+        body,
+        body_bytes: bytes,
+    })
+}
+
 #[cfg(test)]
 mod tests;

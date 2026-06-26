@@ -1808,3 +1808,263 @@ pub fn sticky_header<V: View + 'static>(content: V) -> impl View {
         })
         .background(Color::hex(0xF5F5F5ff))
 }
+
+// ---------------------------------------------------------------------------
+// Tooltip
+// ---------------------------------------------------------------------------
+
+/// Wraps `content` in a tooltip that shows `message` as a dark bubble
+/// on tap.
+pub fn tooltip<V: View + 'static>(content: V, message: &'static str) -> impl View {
+    let show = create_signal(false);
+    column((
+        boxed(
+            boxed(content)
+                .on_tap(move || show.update(|s| *s = !*s)),
+        ),
+        boxed(dynamic(move || {
+            if show.get() {
+                boxed(
+                    column((boxed(text(message)
+                        .color(Color::hex(0xFFFFFFff))
+                        .font_size(12.0)),))
+                        .padding(8.0)
+                        .background(Color::hex(0x333333CC))
+                        .corner_radius(6.0)
+                        .on_tap(move || show.set(false)),
+                )
+            } else {
+                boxed(column(()))
+            }
+        })),
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// StatusBar
+// ---------------------------------------------------------------------------
+
+use rax_dom::StatusBarStyle;
+
+/// A zero-sized view that sets the status bar style. Place near the root.
+pub fn status_bar(style: StatusBarStyle) -> impl View {
+    use rax_dom::Attribute;
+    column(()).decorate(move |tree, id| {
+        tree.bind(id, move || Attribute::StatusBarStyle(style.clone()));
+    })
+}
+
+// ---------------------------------------------------------------------------
+// TabBar / BottomNavigation
+// ---------------------------------------------------------------------------
+
+/// A single tab in a [`tab_bar`].
+pub struct TabItem {
+    /// Short label shown under the icon.
+    pub label: String,
+    /// Optional icon name (from the icon set).
+    pub icon: Option<String>,
+    /// Content view for this tab.
+    pub content: BoxedView,
+}
+
+impl TabItem {
+    /// Create a tab with label and content.
+    pub fn new(label: impl Into<String>, content: impl View + 'static) -> Self {
+        Self { label: label.into(), icon: None, content: boxed(content) }
+    }
+    /// Add an icon name.
+    pub fn icon(mut self, icon_name: impl Into<String>) -> Self {
+        self.icon = Some(icon_name.into());
+        self
+    }
+}
+
+/// A bottom tab bar. Renders the selected tab's content above a row of tab buttons.
+pub fn tab_bar(tabs: Vec<TabItem>, selected: Signal<usize>) -> impl View {
+    let mut content_views: Vec<BoxedView> = Vec::new();
+    let mut button_views: Vec<BoxedView> = Vec::new();
+
+    for (i, tab) in tabs.into_iter().enumerate() {
+        // Content pane — visible when active (opacity 0 = invisible but keeps layout)
+        let sel_for_content = selected;
+        content_views.push(boxed(
+            boxed(tab.content)
+                .opacity_fn(move || if sel_for_content.get() == i { 1.0 } else { 0.0 })
+                .grow(1.0),
+        ));
+
+        // Tab button
+        let label = tab.label.clone();
+        let icon_name = tab.icon.clone();
+        let sel_for_btn = selected;
+        let btn_content: BoxedView = if let Some(ico) = icon_name {
+            boxed(
+                column((
+                    boxed(text(ico.clone()).font_size(20.0)),
+                    boxed(text(label).font_size(11.0)),
+                ))
+                .align(AlignItems::Center),
+            )
+        } else {
+            boxed(text(label).font_size(13.0))
+        };
+        let btn = column((boxed(btn_content),))
+            .grow_by(1.0)
+            .padding(8.0)
+            .on_tap(move || selected.set(i));
+        button_views.push(boxed(
+            boxed(btn)
+                .background_fn(move || {
+                    if sel_for_btn.get() == i {
+                        Color::hex(0xE8F4FFff)
+                    } else {
+                        Color::hex(0xF9F9F9ff)
+                    }
+                }),
+        ));
+    }
+
+    column((
+        boxed(column(content_views).grow()),
+        boxed(
+            row(button_views)
+                .background(Color::hex(0xF9F9F9ff))
+                .border(1.0, Color::hex(0xE0E0E0ff)),
+        ),
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// SegmentedControl
+// ---------------------------------------------------------------------------
+
+/// A horizontal segmented control. `selected` is a reactive index signal.
+pub fn segmented_control(options: Vec<&'static str>, selected: Signal<usize>) -> impl View {
+    let btns: Vec<BoxedView> = options
+        .into_iter()
+        .enumerate()
+        .map(|(i, label)| {
+            let sel = selected;
+            let seg = column((boxed(text(label).font_size(13.0)),))
+                .grow_by(1.0)
+                .padding(8.0)
+                .on_tap(move || selected.set(i));
+            boxed(
+                boxed(seg)
+                    .background_fn(move || {
+                        if sel.get() == i { Color::hex(0x007AFFff) } else { Color::hex(0xE5E5EAff) }
+                    }),
+            )
+        })
+        .collect();
+    row(btns)
+        .corner_radius(8.0)
+        .border(1.0, Color::hex(0xC8C8C8ff))
+}
+
+// ---------------------------------------------------------------------------
+// Breadcrumbs
+// ---------------------------------------------------------------------------
+
+/// A horizontal breadcrumb trail. Items are tappable; the last is non-interactive.
+pub fn breadcrumbs(items: Vec<&'static str>, on_tap: impl Fn(usize) + 'static + Clone) -> impl View {
+    let count = items.len();
+    let mut views: Vec<BoxedView> = Vec::new();
+    for (i, label) in items.into_iter().enumerate() {
+        let is_last = i == count - 1;
+        let on_tap = on_tap.clone();
+        let btn = boxed(text(label)
+            .font_size(14.0)
+            .color(if is_last { Color::hex(0x1C1C1Eff) } else { Color::hex(0x007AFFff) }));
+        if is_last {
+            views.push(btn);
+        } else {
+            views.push(boxed(
+                boxed(btn).on_tap(move || on_tap(i)),
+            ));
+            views.push(boxed(
+                text(" / ").font_size(14.0).color(Color::hex(0x8E8E93ff)),
+            ));
+        }
+    }
+    row(views).gap(0.0)
+}
+
+// ---------------------------------------------------------------------------
+// Backdrop / Scrim
+// ---------------------------------------------------------------------------
+
+/// A semi-transparent full-area scrim overlay. Tapping it calls `on_tap`.
+pub fn backdrop(opacity: f32, on_tap: impl Fn() + 'static) -> impl View {
+    let alpha = (opacity.clamp(0.0, 1.0) * 255.0) as u32;
+    // RRGGBBAA: 0x000000{alpha}
+    let rgba = (0x000000u32 << 8) | alpha;
+    column(())
+        .grow()
+        .background(Color::hex(rgba))
+        .on_tap(on_tap)
+}
+
+// ---------------------------------------------------------------------------
+// Accordion
+// ---------------------------------------------------------------------------
+
+/// A single section in an [`accordion`].
+pub struct AccordionSection {
+    /// Section header label.
+    pub title: String,
+    /// Body content shown when open.
+    pub content: BoxedView,
+}
+
+impl AccordionSection {
+    /// Create a section with title and content view.
+    pub fn new(title: impl Into<String>, content: impl View + 'static) -> Self {
+        Self { title: title.into(), content: boxed(content) }
+    }
+}
+
+/// A single-open accordion. Only one section can be expanded at a time.
+pub fn accordion(sections: Vec<AccordionSection>) -> impl View {
+    let open: Signal<Option<usize>> = create_signal(None);
+
+    let section_views: Vec<BoxedView> = sections
+        .into_iter()
+        .enumerate()
+        .map(|(i, section)| {
+            let title = section.title.clone();
+            let content = section.content;
+            let open_sig = open;
+
+            // Header row
+            let header = boxed(
+                row((
+                    boxed(text(title).font_size(15.0).grow(1.0)),
+                    boxed(dynamic(move || {
+                        let is_open = open_sig.get() == Some(i);
+                        boxed(text(if is_open { "▲" } else { "▼" }).font_size(12.0))
+                    })),
+                ))
+                .padding(16.0)
+                .background(Color::hex(0xF2F2F7ff))
+                .on_tap(move || {
+                    open_sig.update(|o| {
+                        *o = if *o == Some(i) { None } else { Some(i) };
+                    });
+                }),
+            );
+
+            // Body — always in tree, opacity gates visibility
+            let body = boxed(
+                column((content,))
+                    .padding(16.0)
+                    .opacity_fn(move || if open_sig.get() == Some(i) { 1.0 } else { 0.0 }),
+            );
+
+            boxed(column((header, body)))
+        })
+        .collect();
+
+    column(section_views).gap(1.0)
+}

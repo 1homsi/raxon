@@ -20,6 +20,9 @@ local.properties
 DerivedData/
 Pods/
 
+# Local docs (kept offline)
+/docs/
+
 # Editor / OS noise
 .DS_Store
 .idea/

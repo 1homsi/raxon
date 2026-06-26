@@ -1,10 +1,15 @@
-# rax
+# raxon
 
-A **100% Rust**, React-like framework for building **native** mobile apps. No
-JavaScript runtime, no WebView — your declarative Rust UI is rendered with real
-platform widgets (UIKit today; Android Views next).
+A **100% Rust**, signal-driven framework for building **native** mobile apps. No JavaScript, no WebView — your declarative Rust UI renders real platform widgets (UIKit today; Android next).
+
+```toml
+[dependencies]
+raxon = "0.0.1"
+```
 
 ```rust
+use raxon::prelude::*;
+
 fn counter(count: Signal<i32>) -> impl View {
     column((
         text(move || format!("Count: {}", count.get())).font_size(48.0),
@@ -15,59 +20,53 @@ fn counter(count: Signal<i32>) -> impl View {
 }
 ```
 
-It runs today: the demo in [`rust-native-examples`](../dummy/rust-native-examples)
-builds for the iOS Simulator and renders native `UILabel`/`UIButton` laid out by
-the flexbox engine, driven entirely by Rust.
+## Why raxon
 
-## Why
-
-- **Declarative + fine-grained reactive.** Signals update only the views that
-  read them — no virtual-DOM diff. Structure builds once; values bind in place.
-- **Native rendering.** Real platform views via `objc2` (iOS) — native text,
-  accessibility, and scrolling, not a canvas.
-- **Pure Rust public API.** No Swift/Kotlin/JS in app code. (A few hundred lines
-  of unavoidable platform entry-point glue live inside the backend crates, in
-  Rust via `objc2`/JNI — never in your app.)
-- **Stable Rust, minimal macros, testable.** The whole pipeline is verified
-  host-side through a recording backend with zero platform code.
-
-## Workspace layout
-
-```
-raxon-core       geometry, generational arena, color, layout style   (no deps, no_std)
-raxon-reactive   signals / memos / effects, Runtime, ownership scopes
-rax-scheduler  frame phases, priority tasks, cross-thread marshaling
-raxon-dom        retained element tree, mutation + event seam, dynamic structure
-rax-layout     flexbox via taffy, behind a neutral LayoutStyle
-raxon-view       declarative, macro-free view builder (column/row/text/button/dynamic)
-raxon-runtime    the App driver: mount + layout + events + frames
-raxon-ios        UIKit backend (pure Rust via objc2)
-```
-
-The dependency graph is a strict DAG; the render seam (`Backend` trait +
-`Mutation`/`Event`) is the single, identical boundary every platform implements.
+- **Fine-grained reactive.** Signals update only the views that read them — no virtual-DOM diff. Structure builds once; values bind in place.
+- **Native rendering.** Real platform views via `objc2` (iOS) — native text, accessibility, and scrolling, not a canvas.
+- **Pure Rust public API.** No Swift/Kotlin/JS in app code.
+- **Stable Rust, no macros required.** The whole pipeline is testable host-side through a recording backend with zero platform code.
 
 ## Status
 
-Early but real. A reactive, multi-screen app with a tab bar, a dynamic
-add/remove list, and styled cards runs on the iOS Simulator. See
-[`docs/ARCHITECTURE_AUDIT.md`](docs/ARCHITECTURE_AUDIT.md) for the full
-subsystem audit, the load-bearing decisions, known debt, and the roadmap
-(Android backend, text input/IME, navigation, animation, accessibility next).
+Early but functional. A reactive multi-screen app with tab navigation, dynamic lists, animations, and styled cards runs on the iOS Simulator today.
 
-## Running the demo
+| Subsystem | Status |
+|---|---|
+| Signals / memos / effects | ✅ |
+| View builder (column, row, text, button, …) | ✅ |
+| iOS UIKit backend | ✅ |
+| Navigation (stack, tabs, modals, deep links) | ✅ |
+| Animation (tweens, springs, keyframes) | ✅ |
+| Networking (HTTP, WebSocket, SSE) | ✅ |
+| SQLite, Keychain, local storage | ✅ |
+| Android backend | ⬜ |
 
-```sh
-rustup target add aarch64-apple-ios-sim
-cd ../dummy/rust-native-examples
-./run-ios.sh "iPhone 17 Pro"
+## Structure
+
+Everything ships as a single `raxon` crate with subsystems as modules:
+
+```
+raxon::core       — geometry, color, layout style
+raxon::reactive   — signals, memos, effects, stores, context
+raxon::dom        — virtual element tree and platform seam
+raxon::view       — declarative view builder
+raxon::ios        — UIKit backend (cfg'd to iOS targets)
+raxon::runtime    — app driver: layout, events, frames
+raxon::nav        — stack/tab/modal navigation
+raxon::net        — HTTP, WebSocket, SSE, query cache
+raxon::anim       — tweens, springs, easing, keyframes
+raxon::store      — persisted key-value signals
+raxon::sqlite     — SQLite database access
+raxon::keychain   — secure credential storage
+raxon::scheduler  — frame scheduler and task priorities
 ```
 
-## Building & testing the framework
+## Building & testing
 
 ```sh
-cargo test --workspace      # host-side, no platform needed
-cargo clippy --workspace --all-targets
+cargo test -p raxon                              # host-side, no platform needed
+cargo check -p raxon --target aarch64-apple-ios-sim
 ```
 
 ## License

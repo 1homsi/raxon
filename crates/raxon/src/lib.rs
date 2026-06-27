@@ -106,9 +106,10 @@ pub mod prelude {
         install_error_overlay, last_panic, on_deep_link, present_document_picker,
         register_background_task, request_permission, restore_ui_state, save_ui_state,
         schedule_background_task, schedule_notification, set_backdrop, start_location,
-        start_motion, stop_location, stop_motion, use_color_scheme, use_permission,
-        use_app_lifecycle, use_safe_area_insets, App, Backdrop, HapticStyle, KeyboardType,
-        Lifecycle, LocalNotification, NetworkStatus, PermissionKind, PermissionStatus, TextStyle,
+        start_motion, stop_location, stop_motion, use_app_lifecycle, use_color_scheme,
+        use_permission, use_safe_area_insets, use_system_locale, App, Backdrop, HapticStyle,
+        KeyboardType, Lifecycle, LocalNotification, NetworkStatus, PermissionKind,
+        PermissionStatus, TextStyle,
     };
 
     pub use crate::anim::{

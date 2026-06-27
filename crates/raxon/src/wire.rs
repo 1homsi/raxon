@@ -192,6 +192,9 @@ pub enum WireEvent {
         color_scheme: WireColorScheme,
         high_contrast: bool,
     },
+    LocaleChanged {
+        locale: String,
+    },
     QrDetected {
         target: u64,
         value: String,
@@ -371,6 +374,7 @@ impl WireEvent {
                 color_scheme: color_scheme.into(),
                 high_contrast,
             },
+            WireEvent::LocaleChanged { locale } => Event::LocaleChanged { locale },
             WireEvent::QrDetected { target, value } => Event::QrDetected {
                 target: widget(target),
                 value,
@@ -556,6 +560,7 @@ impl From<Event> for WireEvent {
                 color_scheme: color_scheme.into(),
                 high_contrast,
             },
+            Event::LocaleChanged { locale } => WireEvent::LocaleChanged { locale },
             Event::QrDetected { target, value } => WireEvent::QrDetected {
                 target: target.to_u64(),
                 value,
@@ -886,6 +891,23 @@ mod tests {
             Event::AppearanceChanged {
                 color_scheme: ColorScheme::Dark,
                 high_contrast: true,
+            }
+        );
+    }
+
+    #[test]
+    fn locale_event_json_round_trips_to_engine_event() {
+        let event = WireEvent::LocaleChanged {
+            locale: "ar-LB".to_string(),
+        };
+
+        let encoded = event.encode_json().expect("event encodes");
+        let decoded = WireEvent::decode_json(&encoded).expect("event decodes");
+
+        assert_eq!(
+            decoded.into_event(),
+            Event::LocaleChanged {
+                locale: "ar-LB".to_string(),
             }
         );
     }

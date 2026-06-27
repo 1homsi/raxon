@@ -2538,6 +2538,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.OpenableColumns
 import android.util.Base64
@@ -2565,6 +2566,7 @@ open class __ANDROID_ACTIVITY__ : Activity() {
     private var lastNetworkStatus: String? = null
     private var lastLifecycleStatus: String? = null
     private var lastAppearanceSignature: String? = null
+    private var lastLocaleTag: String? = null
     private var pendingMediaMaxSelection = 1
     private val frameCallback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
@@ -2602,6 +2604,7 @@ open class __ANDROID_ACTIVITY__ : Activity() {
         startFrameLoop()
         startNetworkMonitoring()
         dispatchAppearance()
+        dispatchLocale()
         dispatchLifecycle("resumed")
     }
 
@@ -2630,6 +2633,7 @@ open class __ANDROID_ACTIVITY__ : Activity() {
         super.onConfigurationChanged(newConfig)
         mountOrResize()
         dispatchAppearance()
+        dispatchLocale()
     }
 
     override fun onBackPressed() {
@@ -2709,6 +2713,7 @@ open class __ANDROID_ACTIVITY__ : Activity() {
             host.mount(width, height)
             reportNetworkStatus()
             dispatchAppearance()
+            dispatchLocale()
             dispatchLifecycle("resumed")
         } else {
             host.resize(width, height)
@@ -2812,6 +2817,31 @@ open class __ANDROID_ACTIVITY__ : Activity() {
                     .put("high_contrast", highContrast)
             )
         )
+    }
+
+    private fun dispatchLocale() {
+        if (!::host.isInitialized || host.handle == 0L) return
+        val locale = currentLocaleTag()
+        if (locale == lastLocaleTag) return
+        lastLocaleTag = locale
+        host.dispatchEvents(
+            JSONArray().put(
+                JSONObject()
+                    .put("type", "locale_changed")
+                    .put("locale", locale)
+            )
+        )
+    }
+
+    private fun currentLocaleTag(): String {
+        val locale =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                resources.configuration.locales.get(0)
+            } else {
+                @Suppress("DEPRECATION")
+                resources.configuration.locale
+            }
+        return locale?.toLanguageTag()?.takeIf { it.isNotBlank() } ?: "en"
     }
 
     private fun dispatchLifecycle(lifecycle: String) {
@@ -3135,7 +3165,7 @@ module, or merge these files into an existing module. Override
 platform services and custom widgets. The generated Activity includes default
 handlers for clipboard writes, share text, external URLs, accessibility
 announcements, focus requests, network reachability, media picking, and document
-picking.
+picking, plus system appearance and locale changes.
 "#,
         package_path = options.android_package.replace('.', "/"),
         host_class = options.android_class,
@@ -3310,6 +3340,8 @@ export class RaxonWebHost {
     this.lastLifecycleStatus = null;
     this.appearanceListenersInstalled = false;
     this.lastAppearanceSignature = null;
+    this.localeListenersInstalled = false;
+    this.lastLocale = null;
   }
 
   mount(width = this.root.clientWidth, height = this.root.clientHeight) {
@@ -3318,6 +3350,7 @@ export class RaxonWebHost {
       this.installNetworkStatusListeners();
       this.installLifecycleListeners();
       this.installAppearanceListeners();
+      this.installLocaleListeners();
     }
     return this.handle;
   }
@@ -3469,6 +3502,30 @@ export class RaxonWebHost {
     report();
   }
 
+  browserLocale() {
+    if (typeof navigator === "undefined") return "en";
+    const languages = Array.isArray(navigator.languages) ? navigator.languages : [];
+    return languages.find(Boolean) || navigator.language || "en";
+  }
+
+  reportLocale() {
+    const locale = String(this.browserLocale() || "en");
+    if (locale === this.lastLocale) return;
+    this.lastLocale = locale;
+    this.dispatchEvents([{ type: "locale_changed", locale }]);
+  }
+
+  installLocaleListeners() {
+    if (this.localeListenersInstalled || typeof window === "undefined") return;
+    this.localeListenersInstalled = true;
+    const report = () => this.reportLocale();
+    window.addEventListener("languagechange", report);
+    this.listenerDisposers.set("__locale", () => {
+      window.removeEventListener("languagechange", report);
+    });
+    report();
+  }
+
   destroy() {
     this.reportLifecycle("terminating");
     const reply = this.request({
@@ -3484,12 +3541,16 @@ export class RaxonWebHost {
     this.listenerDisposers.delete("__app_lifecycle");
     this.listenerDisposers.get("__appearance")?.();
     this.listenerDisposers.delete("__appearance");
+    this.listenerDisposers.get("__locale")?.();
+    this.listenerDisposers.delete("__locale");
     this.nodes.clear();
     this.networkListenersInstalled = false;
     this.lifecycleListenersInstalled = false;
     this.lastLifecycleStatus = null;
     this.appearanceListenersInstalled = false;
     this.lastAppearanceSignature = null;
+    this.localeListenersInstalled = false;
+    this.lastLocale = null;
     this.root.replaceChildren();
     return reply;
   }
@@ -4505,10 +4566,11 @@ functions.
 
 Run `npm run dev` from this directory and open the printed local URL. The
 generated host includes default handlers for clipboard writes, share text,
-external URLs, accessibility announcements, and focus requests. Customize
-`main.js` or pass `handlePlatformRequest` for app-specific platform requests
-such as notifications or media pickers. Set `HOST` or `PORT` to override the
-dev-server bind address.
+external URLs, accessibility announcements, focus requests, network
+reachability, media/document picking, app lifecycle, system appearance, and
+locale changes. Customize `main.js` or pass `handlePlatformRequest` for
+app-specific platform requests such as notifications or media pickers. Set
+`HOST` or `PORT` to override the dev-server bind address.
 "#,
         wasm_module = options.wasm_module,
     )
@@ -5179,6 +5241,7 @@ name = "demo_native"
         assert!(activity.contains("import android.content.ClipboardManager"));
         assert!(activity.contains("import android.content.res.Configuration"));
         assert!(activity.contains("import android.net.ConnectivityManager"));
+        assert!(activity.contains("import android.os.Build"));
         assert!(activity.contains("import android.provider.OpenableColumns"));
         assert!(activity.contains("import android.util.Base64"));
         assert!(activity.contains("import android.view.accessibility.AccessibilityManager"));
@@ -5197,6 +5260,10 @@ name = "demo_native"
         assert!(activity.contains("\"appearance_changed\""));
         assert!(activity.contains("\"color_scheme\""));
         assert!(activity.contains("\"high_contrast\""));
+        assert!(activity.contains("dispatchLocale()"));
+        assert!(activity.contains("currentLocaleTag()"));
+        assert!(activity.contains("\"locale_changed\""));
+        assert!(activity.contains("toLanguageTag()"));
         assert!(activity.contains("\"present_media_picker\""));
         assert!(activity.contains("ACTION_OPEN_DOCUMENT"));
         assert!(activity.contains("\"media_picked\""));
@@ -5268,6 +5335,9 @@ name = "demo_native"
         assert!(web_js.contains("prefers-color-scheme: dark"));
         assert!(web_js.contains("prefers-contrast: more"));
         assert!(web_js.contains("forced-colors: active"));
+        assert!(web_js.contains("installLocaleListeners"));
+        assert!(web_js.contains("type: \"locale_changed\""));
+        assert!(web_js.contains("languagechange"));
         assert!(web_js.contains("fileToBase64(file)"));
         assert!(web_js.contains("presentMediaPicker"));
         assert!(web_js.contains("type: \"media_picked\""));

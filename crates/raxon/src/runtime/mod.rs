@@ -19,6 +19,7 @@ use crate::reactive::{
     create_global_signal, create_memo, create_root, create_signal, provide_context, use_context,
     Memo, Scope, Signal,
 };
+use crate::view::layout::{update_layout_direction, LayoutDirection as AppLayoutDirection};
 use crate::view::{mount, View};
 
 // Re-export so callers can name the type without reaching into rax-dom.
@@ -120,6 +121,11 @@ thread_local! {
     /// [`use_app_lifecycle`]; updated by the platform backend via
     /// [`update_app_lifecycle`].
     static APP_LIFECYCLE: Cell<Option<Signal<Lifecycle>>> = const { Cell::new(None) };
+
+    /// Reactive signal for the system locale/preferred language. Lazily
+    /// initialised by [`use_system_locale`]; updated by platform hosts via
+    /// [`Event::LocaleChanged`](crate::dom::Event::LocaleChanged).
+    static SYSTEM_LOCALE: Cell<Option<Signal<String>>> = const { Cell::new(None) };
 
     /// Reactive signal for the current on-screen keyboard height in logical
     /// pixels. Zero when the keyboard is hidden. Lazily initialised by
@@ -715,6 +721,67 @@ pub fn update_app_lifecycle(lifecycle: Lifecycle) {
     });
 }
 
+/// Returns a reactive `Signal<String>` containing the platform's preferred
+/// locale/language tag, such as `en-US` or `ar-LB`.
+///
+/// The initial value comes from [`crate::i18n::system_locale`] and is updated by
+/// platform hosts through [`Event::LocaleChanged`](crate::dom::Event::LocaleChanged).
+/// Locale updates also refresh the app-wide
+/// [`use_layout_direction`](crate::view::layout::use_layout_direction) signal so
+/// RTL languages can mirror layouts automatically.
+///
+/// Must be called while building views under a running [`App`].
+pub fn use_system_locale() -> Signal<String> {
+    SYSTEM_LOCALE.with(|slot| {
+        if let Some(sig) = slot.get() {
+            return sig;
+        }
+        let sig = create_signal(normalize_locale_tag(&crate::i18n::system_locale()));
+        slot.set(Some(sig));
+        sig
+    })
+}
+
+/// Called by platform backends when the preferred locale changes. App code
+/// should normally read [`use_system_locale`] instead of calling this directly.
+pub fn update_system_locale(locale: impl Into<String>) {
+    let locale = normalize_locale_tag(&locale.into());
+    SYSTEM_LOCALE.with(|slot| {
+        if let Some(sig) = slot.get() {
+            sig.set(locale.clone());
+        }
+    });
+    update_layout_direction(layout_direction_for_locale(&locale));
+}
+
+fn normalize_locale_tag(locale: &str) -> String {
+    let tag = locale
+        .split('.')
+        .next()
+        .unwrap_or(locale)
+        .trim()
+        .replace('_', "-");
+    if tag.is_empty() {
+        "en".to_string()
+    } else {
+        tag
+    }
+}
+
+fn layout_direction_for_locale(locale: &str) -> AppLayoutDirection {
+    let lang = locale
+        .split(['-', '_'])
+        .next()
+        .unwrap_or(locale)
+        .to_ascii_lowercase();
+    match lang.as_str() {
+        "ar" | "he" | "fa" | "ur" | "yi" | "ji" | "iw" | "ps" | "sd" | "ug" => {
+            AppLayoutDirection::Rtl
+        }
+        _ => AppLayoutDirection::Ltr,
+    }
+}
+
 /// Returns a reactive `Signal<f32>` whose value is the current on-screen
 /// keyboard height in logical pixels. The signal is `0.0` when the keyboard is
 /// hidden and a positive value (typically 260–350 pt) while it is shown.
@@ -1249,6 +1316,9 @@ impl App {
             {
                 self.set_color_scheme(*color_scheme);
                 self.set_high_contrast(*high_contrast);
+            }
+            if let Event::LocaleChanged { locale } = &event {
+                update_system_locale(locale.clone());
             }
             self.tree.dispatch(&event);
         }

@@ -148,6 +148,9 @@ thread_local! {
     // Tick counter + last value used to throttle native reachability polling.
     static NETWORK_TICK: Cell<u64> = const { Cell::new(0) };
     static LAST_NETWORK_STATUS: Cell<Option<NetworkStatus>> = const { Cell::new(None) };
+    // Tick counter + last value used to throttle preferred-locale polling.
+    static LOCALE_TICK: Cell<u64> = const { Cell::new(0) };
+    static LAST_LOCALE: RefCell<Option<String>> = const { RefCell::new(None) };
     // UIScrollView callbacks keyed by WidgetId::to_u64(). The Objective-C
     // delegate remains ivar-free and looks handlers up by the view's tag.
     static SCROLL_HANDLERS: RefCell<HashMap<u64, ScrollHandlers>> = RefCell::new(HashMap::new());
@@ -217,6 +220,50 @@ fn poll_ios_network_status_if_due() -> Option<NetworkStatus> {
             }
         })
     })
+}
+
+fn poll_ios_locale_if_due() -> Option<String> {
+    LOCALE_TICK.with(|tick| {
+        let current = tick.get();
+        tick.set(current.wrapping_add(1));
+        if current % 60 != 0 {
+            return None;
+        }
+
+        let locale = query_ios_locale().unwrap_or_else(|| "en".to_string());
+        LAST_LOCALE.with(|last| {
+            let mut last = last.borrow_mut();
+            if last.as_deref() == Some(locale.as_str()) {
+                None
+            } else {
+                *last = Some(locale.clone());
+                Some(locale)
+            }
+        })
+    })
+}
+
+fn query_ios_locale() -> Option<String> {
+    unsafe {
+        let languages: *mut AnyObject = msg_send![class!(NSLocale), preferredLanguages];
+        if languages.is_null() {
+            return None;
+        }
+        let count: usize = msg_send![languages, count];
+        if count == 0 {
+            return None;
+        }
+        let first: *mut AnyObject = msg_send![languages, objectAtIndex: 0usize];
+        if first.is_null() {
+            return None;
+        }
+        let tag = (*(first as *const NSString)).to_string().replace('_', "-");
+        if tag.trim().is_empty() {
+            None
+        } else {
+            Some(tag)
+        }
+    }
 }
 
 fn query_ios_network_status() -> NetworkStatus {
@@ -386,6 +433,7 @@ fn handle_tick() {
         std::mem::take(&mut *v)
     });
     let network_status = poll_ios_network_status_if_due();
+    let locale = poll_ios_locale_if_due();
 
     STATE.with(|s| {
         if let Some(state) = s.borrow().as_ref() {
@@ -463,6 +511,9 @@ fn handle_tick() {
                 state
                     .event_sink
                     .dispatch(Event::NetworkStatusChanged { status });
+            }
+            if let Some(locale) = locale {
+                state.event_sink.dispatch(Event::LocaleChanged { locale });
             }
             // Dispatch queued motion sensor readings.
             for (accel_x, accel_y, accel_z, gyro_x, gyro_y, gyro_z) in motion_events {

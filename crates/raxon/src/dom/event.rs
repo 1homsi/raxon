@@ -190,6 +190,11 @@ pub enum Event {
         /// Whether the platform is requesting higher contrast.
         high_contrast: bool,
     },
+    /// System locale/preferred language changed. App-global.
+    LocaleChanged {
+        /// Preferred locale/language tag, e.g. `en-US` or `ar-LB`.
+        locale: String,
+    },
     /// A QR code was detected in the camera feed.
     QrDetected {
         /// The camera widget that detected the code.
@@ -342,6 +347,8 @@ pub enum EventKind {
     AppLifecycle,
     /// [`Event::AppearanceChanged`].
     AppearanceChanged,
+    /// [`Event::LocaleChanged`].
+    LocaleChanged,
     /// [`Event::QrDetected`].
     QrDetected,
     /// [`Event::PinchChanged`].
@@ -395,6 +402,7 @@ impl Event {
             Event::KeyboardWillHide => EventKind::KeyboardWillHide,
             Event::AppLifecycle(_) => EventKind::AppLifecycle,
             Event::AppearanceChanged { .. } => EventKind::AppearanceChanged,
+            Event::LocaleChanged { .. } => EventKind::LocaleChanged,
             Event::QrDetected { .. } => EventKind::QrDetected,
             Event::PinchChanged { .. } => EventKind::Pinch,
             Event::DeepLink { .. } => EventKind::DeepLink,
@@ -437,6 +445,7 @@ impl Event {
             | Event::KeyboardWillHide
             | Event::AppLifecycle(_)
             | Event::AppearanceChanged { .. }
+            | Event::LocaleChanged { .. }
             | Event::DeepLink { .. }
             | Event::BiometricResult { .. }
             | Event::PermissionChanged { .. }

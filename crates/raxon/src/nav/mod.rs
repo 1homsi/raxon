@@ -670,6 +670,8 @@ pub enum RouteTransitionKind {
     Replace,
     /// The router moved back to a previous history entry.
     Pop,
+    /// The router history was reset to a new root route.
+    Reset,
     /// Navigation state was restored from a snapshot or persisted storage.
     Restore,
     /// The browser supplied a route through back/forward or hash navigation.
@@ -814,6 +816,121 @@ struct PendingRouteResult {
     type_id: TypeId,
     type_name: &'static str,
     callback: Box<dyn FnOnce(Box<dyn Any>)>,
+}
+
+/// A serializable command for server-driven or remote-config navigation.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum NavigationCommand {
+    /// Push a route onto the string-router history stack.
+    Navigate {
+        /// Route to navigate to.
+        route: String,
+    },
+    /// Replace the current route without adding a history entry.
+    Replace {
+        /// Route to replace with.
+        route: String,
+    },
+    /// Go back to the previous route when available.
+    Back,
+    /// Reset history to a single root route.
+    Reset {
+        /// New root route.
+        route: String,
+    },
+    /// Present a modal route without changing the main history stack.
+    PresentModal {
+        /// Modal route to present.
+        route: String,
+    },
+    /// Dismiss the top-most modal route.
+    DismissModal,
+    /// Set one query parameter on the current route.
+    SetQueryParam {
+        /// Query key to set.
+        key: String,
+        /// Query value to set.
+        value: String,
+        /// Replace the current route instead of pushing a history entry.
+        #[serde(default)]
+        replace: bool,
+    },
+    /// Replace all values for one query parameter on the current route.
+    SetQueryParamValues {
+        /// Query key to set.
+        key: String,
+        /// Query values to set. Empty removes the key.
+        values: Vec<String>,
+        /// Replace the current route instead of pushing a history entry.
+        #[serde(default)]
+        replace: bool,
+    },
+    /// Remove a query parameter from the current route.
+    RemoveQueryParam {
+        /// Query key to remove.
+        key: String,
+        /// Replace the current route instead of pushing a history entry.
+        #[serde(default)]
+        replace: bool,
+    },
+}
+
+/// Kind of a navigation command after it has been applied.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NavigationCommandKind {
+    /// Push command.
+    Navigate,
+    /// Replace command.
+    Replace,
+    /// Back command.
+    Back,
+    /// Reset command.
+    Reset,
+    /// Present-modal command.
+    PresentModal,
+    /// Dismiss-modal command.
+    DismissModal,
+    /// Set one query parameter command.
+    SetQueryParam,
+    /// Set repeated query parameter values command.
+    SetQueryParamValues,
+    /// Remove query parameter command.
+    RemoveQueryParam,
+}
+
+/// Result of applying a [`NavigationCommand`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NavigationCommandOutcome {
+    /// Command kind that was applied.
+    pub kind: NavigationCommandKind,
+    /// Whether the command changed router/modal state or was accepted.
+    pub applied: bool,
+    /// Current route after command application.
+    pub current: String,
+    /// String-router history after command application.
+    pub history: Vec<String>,
+    /// Modal stack after command application.
+    pub modals: Vec<String>,
+}
+
+impl NavigationCommand {
+    fn kind(&self) -> NavigationCommandKind {
+        match self {
+            NavigationCommand::Navigate { .. } => NavigationCommandKind::Navigate,
+            NavigationCommand::Replace { .. } => NavigationCommandKind::Replace,
+            NavigationCommand::Back => NavigationCommandKind::Back,
+            NavigationCommand::Reset { .. } => NavigationCommandKind::Reset,
+            NavigationCommand::PresentModal { .. } => NavigationCommandKind::PresentModal,
+            NavigationCommand::DismissModal => NavigationCommandKind::DismissModal,
+            NavigationCommand::SetQueryParam { .. } => NavigationCommandKind::SetQueryParam,
+            NavigationCommand::SetQueryParamValues { .. } => {
+                NavigationCommandKind::SetQueryParamValues
+            }
+            NavigationCommand::RemoveQueryParam { .. } => NavigationCommandKind::RemoveQueryParam,
+        }
+    }
 }
 
 /// Register a route guard. Before each navigation `condition` is evaluated; if
@@ -1272,6 +1389,136 @@ pub fn replace_route(route: &str) -> String {
     commit_route_change(&from, &destination, RouteTransitionKind::Replace);
 
     destination
+}
+
+/// Resets the string-router history to a single root route.
+///
+/// Guards still run, route-result callbacks are cleared, and on web the address
+/// bar is updated with `history.replaceState`.
+pub fn reset_route(route: &str) -> String {
+    let destination = check_guards(route).unwrap_or_else(|| route.to_string());
+    let from = HISTORY_STACK.with(|s| {
+        let mut stack = s.borrow_mut();
+        let from = stack.last().cloned().unwrap_or_default();
+        stack.clear();
+        stack.push(destination.clone());
+        from
+    });
+    ROUTE_RESULT_HANDLERS.with(|handlers| handlers.borrow_mut().clear());
+
+    crate::web::replace_path(&destination);
+    commit_route_change(&from, &destination, RouteTransitionKind::Reset);
+
+    destination
+}
+
+/// Applies one serializable navigation command to the string router.
+pub fn apply_navigation_command(command: NavigationCommand) -> NavigationCommandOutcome {
+    let kind = command.kind();
+    let applied = match command {
+        NavigationCommand::Navigate { route } => {
+            navigate(&route);
+            true
+        }
+        NavigationCommand::Replace { route } => {
+            replace_route(&route);
+            true
+        }
+        NavigationCommand::Back => go_back(),
+        NavigationCommand::Reset { route } => {
+            reset_route(&route);
+            true
+        }
+        NavigationCommand::PresentModal { route } => {
+            present_modal(&route);
+            true
+        }
+        NavigationCommand::DismissModal => dismiss_modal(),
+        NavigationCommand::SetQueryParam {
+            key,
+            value,
+            replace,
+        } => {
+            let route = current_route_location()
+                .with_query_param(&key, value)
+                .to_route_string();
+            if replace {
+                replace_route(&route);
+            } else {
+                navigate(&route);
+            }
+            true
+        }
+        NavigationCommand::SetQueryParamValues {
+            key,
+            values,
+            replace,
+        } => {
+            let route = current_route_location()
+                .with_query_values(&key, values)
+                .to_route_string();
+            if replace {
+                replace_route(&route);
+            } else {
+                navigate(&route);
+            }
+            true
+        }
+        NavigationCommand::RemoveQueryParam { key, replace } => {
+            let route = current_route_location()
+                .without_query_param(&key)
+                .to_route_string();
+            if replace {
+                replace_route(&route);
+            } else {
+                navigate(&route);
+            }
+            true
+        }
+    };
+
+    navigation_command_outcome(kind, applied)
+}
+
+/// Applies commands in order, returning one outcome per command.
+pub fn apply_navigation_commands(
+    commands: impl IntoIterator<Item = NavigationCommand>,
+) -> Vec<NavigationCommandOutcome> {
+    commands.into_iter().map(apply_navigation_command).collect()
+}
+
+/// Serializes a navigation command as JSON.
+pub fn encode_navigation_command(command: &NavigationCommand) -> Result<String, String> {
+    serde_json::to_string(command).map_err(|err| err.to_string())
+}
+
+/// Parses one navigation command from JSON.
+pub fn decode_navigation_command(json: &str) -> Result<NavigationCommand, String> {
+    serde_json::from_str(json).map_err(|err| err.to_string())
+}
+
+/// Parses an array of navigation commands from JSON.
+pub fn decode_navigation_commands(json: &str) -> Result<Vec<NavigationCommand>, String> {
+    serde_json::from_str(json).map_err(|err| err.to_string())
+}
+
+/// Parses and applies one JSON-encoded navigation command.
+pub fn apply_navigation_command_json(json: &str) -> Result<NavigationCommandOutcome, String> {
+    decode_navigation_command(json).map(apply_navigation_command)
+}
+
+fn navigation_command_outcome(
+    kind: NavigationCommandKind,
+    applied: bool,
+) -> NavigationCommandOutcome {
+    let state = navigation_state();
+    NavigationCommandOutcome {
+        kind,
+        applied,
+        current: state.current,
+        history: state.history,
+        modals: state.modals,
+    }
 }
 
 /// Pop the current route from the history stack and return to the previous
@@ -2554,16 +2801,18 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
+        apply_navigation_command, apply_navigation_command_json, apply_navigation_commands,
         build_route, build_route_with_query, cancel_route_result, create_navigator,
-        create_tab_stack_navigator, current_route, decode_navigation_state,
+        create_tab_stack_navigator, current_route, decode_navigation_command,
+        decode_navigation_commands, decode_navigation_state, encode_navigation_command,
         encode_navigation_state, has_pending_route_result, match_route, match_route_location,
         modal_stack, navigate, navigate_for_result, navigation_debug_snapshot, navigation_state,
         on_appear, on_disappear, on_navigate, on_transition_complete, on_transition_start,
         parse_deep_link, parse_query, parse_query_all, parse_route_location,
         pending_route_result_route, pending_route_result_type, present_modal, replace_route,
-        restore_navigation_state, restore_saved_navigation_state, return_route_result, route,
-        save_navigation_state, try_navigate_for_result, NavigationState, NavigatorTransitionKind,
-        RouteTransitionKind,
+        reset_route, restore_navigation_state, restore_saved_navigation_state, return_route_result,
+        route, save_navigation_state, try_navigate_for_result, NavigationCommand,
+        NavigationCommandKind, NavigationState, NavigatorTransitionKind, RouteTransitionKind,
     };
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -2813,6 +3062,107 @@ mod tests {
         )
         .expect("route should build");
         assert_eq!(overridden, "/orders/42?tab=history");
+    }
+
+    #[test]
+    fn navigation_command_json_round_trips_and_applies() {
+        super::reset_navigation_for_tests();
+
+        let command = NavigationCommand::SetQueryParam {
+            key: "tab".to_string(),
+            value: "items".to_string(),
+            replace: true,
+        };
+        let json = encode_navigation_command(&command).expect("command should encode");
+        assert_eq!(
+            decode_navigation_command(&json).expect("command should decode"),
+            command
+        );
+
+        let commands = decode_navigation_commands(
+            r#"[
+                {"type":"navigate","route":"/orders/42"},
+                {"type":"set_query_param","key":"tab","value":"items","replace":true},
+                {"type":"back"}
+            ]"#,
+        )
+        .expect("command list should decode");
+        assert_eq!(commands.len(), 3);
+        assert_eq!(
+            commands[0],
+            NavigationCommand::Navigate {
+                route: "/orders/42".to_string()
+            }
+        );
+
+        let outcome = apply_navigation_command_json(r#"{"type":"navigate","route":"/orders"}"#)
+            .expect("command json should apply");
+        assert_eq!(outcome.kind, NavigationCommandKind::Navigate);
+        assert!(outcome.applied);
+        assert_eq!(outcome.current, "/orders");
+
+        super::reset_navigation_for_tests();
+    }
+
+    #[test]
+    fn navigation_commands_drive_history_query_modals_and_reset() {
+        super::reset_navigation_for_tests();
+
+        let outcomes = apply_navigation_commands(vec![
+            NavigationCommand::Navigate {
+                route: "/orders/42".to_string(),
+            },
+            NavigationCommand::SetQueryParamValues {
+                key: "tag".to_string(),
+                values: vec!["paid".to_string(), "pickup".to_string()],
+                replace: true,
+            },
+            NavigationCommand::PresentModal {
+                route: "/filters".to_string(),
+            },
+            NavigationCommand::DismissModal,
+        ]);
+
+        assert_eq!(outcomes.len(), 4);
+        assert_eq!(outcomes[0].kind, NavigationCommandKind::Navigate);
+        assert_eq!(outcomes[1].kind, NavigationCommandKind::SetQueryParamValues);
+        assert_eq!(outcomes[1].current, "/orders/42?tag=paid&tag=pickup");
+        assert_eq!(outcomes[1].history, vec!["/orders/42?tag=paid&tag=pickup"]);
+        assert_eq!(outcomes[2].modals, vec!["/filters".to_string()]);
+        assert!(outcomes[3].applied);
+        assert!(outcomes[3].modals.is_empty());
+
+        navigate_for_result("/products/pick", |_: String| {});
+        assert!(has_pending_route_result());
+
+        let reset = apply_navigation_command(NavigationCommand::Reset {
+            route: "/checkout".to_string(),
+        });
+        assert_eq!(reset.kind, NavigationCommandKind::Reset);
+        assert!(reset.applied);
+        assert_eq!(reset.current, "/checkout");
+        assert_eq!(reset.history, vec!["/checkout".to_string()]);
+        assert!(!has_pending_route_result());
+
+        super::reset_navigation_for_tests();
+    }
+
+    #[test]
+    fn navigation_command_reports_noop_back_and_modal_dismiss() {
+        super::reset_navigation_for_tests();
+        reset_route("/");
+
+        let back = apply_navigation_command(NavigationCommand::Back);
+        assert_eq!(back.kind, NavigationCommandKind::Back);
+        assert!(!back.applied);
+        assert_eq!(back.current, "/");
+
+        let dismiss = apply_navigation_command(NavigationCommand::DismissModal);
+        assert_eq!(dismiss.kind, NavigationCommandKind::DismissModal);
+        assert!(!dismiss.applied);
+        assert!(dismiss.modals.is_empty());
+
+        super::reset_navigation_for_tests();
     }
 
     #[test]

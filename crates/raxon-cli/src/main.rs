@@ -4297,6 +4297,8 @@ export interface RaxonNavigationCommandOutcome {
   kind: RaxonNavigationCommandKind;
   applied: boolean;
   current: string;
+  location: RaxonRouteLocation;
+  routeFragment?: string | null;
   history: string[];
   modals: string[];
 }
@@ -4722,8 +4724,8 @@ generated host includes default handlers for clipboard writes, share text,
 external URLs, accessibility announcements, focus requests, network
 reachability, media/document picking, app lifecycle, system appearance, and
 locale changes, browser URL/back-forward sync, plus `applyNavigationCommand(s)`
-and `navigationDebugSnapshot()` for host-driven navigation and devtools
-inspection. Pass `syncBrowserNavigation: false` to `createRaxonWebHost` if your
+with parsed location/query/fragment outcomes and `navigationDebugSnapshot()` for
+host-driven navigation and devtools inspection. Pass `syncBrowserNavigation: false` to `createRaxonWebHost` if your
 Rust app binds browser history itself.
 Customize `main.js` or pass `handlePlatformRequest` for
 app-specific platform requests such as notifications or media pickers. Set
@@ -5548,6 +5550,8 @@ name = "demo_native"
         assert!(web_dts.contains("queryAll: Record<string, string[]>"));
         assert!(web_dts.contains("routeFragment?: string | null"));
         assert!(web_dts.contains("navigationDebugSnapshot(): RaxonNavigationDebugSnapshot | null"));
+        assert!(web_dts.contains("location: RaxonRouteLocation"));
+        assert!(web_dts.contains("routeFragment?: string | null"));
         assert!(web_dts.contains(
             "applyNavigationCommand(command: RaxonNavigationCommand): RaxonNavigationCommandOutcome | null"
         ));
@@ -5587,6 +5591,7 @@ name = "demo_native"
         let web_readme = fs::read_to_string(out_dir.join("web/README.md")).unwrap();
         assert!(web_readme.contains("navigationDebugSnapshot()"));
         assert!(web_readme.contains("applyNavigationCommand(s)"));
+        assert!(web_readme.contains("parsed location/query/fragment outcomes"));
         assert!(web_readme.contains("browser URL/back-forward sync"));
         assert!(web_readme.contains("syncBrowserNavigation: false"));
 

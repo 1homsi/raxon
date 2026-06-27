@@ -1062,6 +1062,21 @@ mod tests {
             response_json["outcomes"][3]["current"].as_str(),
             Some("/orders?tab=items&tab=notes#details")
         );
+        assert_eq!(response_json["outcomes"][2]["location"]["path"], "/orders");
+        assert_eq!(
+            response_json["outcomes"][2]["location"]["queryAll"]["tab"],
+            json!(["items", "notes"])
+        );
+        assert_eq!(
+            response_json["outcomes"][2]["location"]["fragment"],
+            "details"
+        );
+        assert_eq!(response_json["outcomes"][2]["routeFragment"], "details");
+        assert_eq!(
+            response_json["outcomes"][3]["location"]["fragment"],
+            "details"
+        );
+        assert_eq!(response_json["outcomes"][3]["routeFragment"], "details");
         assert_eq!(response_json["outcomes"][3]["modals"][0], "/filters");
         match decoded.response {
             HostBridgeResponse::NavigationCommandOutcomes { outcomes } => {
@@ -1074,15 +1089,22 @@ mod tests {
                     outcomes[1].kind,
                     crate::nav::NavigationCommandKind::SetQueryParamValues
                 );
+                assert_eq!(outcomes[1].location.query_value("tab"), Some("items"));
+                assert_eq!(
+                    outcomes[1].location.query_values("tab"),
+                    Some(&["items".to_string(), "notes".to_string()][..])
+                );
                 assert_eq!(
                     outcomes[2].kind,
                     crate::nav::NavigationCommandKind::SetFragment
                 );
+                assert_eq!(outcomes[2].route_fragment.as_deref(), Some("details"));
                 assert_eq!(
                     outcomes[3].kind,
                     crate::nav::NavigationCommandKind::PresentModal
                 );
                 assert_eq!(outcomes[3].current, "/orders?tab=items&tab=notes#details");
+                assert_eq!(outcomes[3].location.fragment.as_deref(), Some("details"));
                 assert_eq!(outcomes[3].modals, vec!["/filters".to_string()]);
             }
             other => panic!("expected navigation outcomes response, got {other:?}"),
@@ -1101,6 +1123,12 @@ mod tests {
                     crate::nav::NavigationCommandKind::RemoveFragment
                 );
                 assert_eq!(outcome.current, "/orders?tab=items&tab=notes");
+                assert_eq!(outcome.location.path, "/orders");
+                assert_eq!(
+                    outcome.location.query_values("tab"),
+                    Some(&["items".to_string(), "notes".to_string()][..])
+                );
+                assert_eq!(outcome.route_fragment, None);
                 assert_eq!(outcome.modals, vec!["/filters".to_string()]);
             }
             other => panic!("expected navigation outcome response, got {other:?}"),

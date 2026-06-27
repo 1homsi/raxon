@@ -920,6 +920,7 @@ pub enum NavigationCommandKind {
 
 /// Result of applying a [`NavigationCommand`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NavigationCommandOutcome {
     /// Command kind that was applied.
     pub kind: NavigationCommandKind,
@@ -927,6 +928,15 @@ pub struct NavigationCommandOutcome {
     pub applied: bool,
     /// Current route after command application.
     pub current: String,
+    /// Parsed current route after command application.
+    #[serde(default)]
+    pub location: RouteLocation,
+    /// Decoded app fragment after command application.
+    ///
+    /// For hash-router URLs such as `/#/checkout?step=pay#notes`, this is the
+    /// inner app fragment (`"notes"`) rather than the full hash-route marker.
+    #[serde(default)]
+    pub route_fragment: Option<String>,
     /// String-router history after command application.
     pub history: Vec<String>,
     /// Modal stack after command application.
@@ -1056,6 +1066,17 @@ pub struct RouteLocation {
     /// Decoded URL fragment without the leading `#`, when present. Hash-router
     /// URLs keep their route marker here for round-tripping.
     pub fragment: Option<String>,
+}
+
+impl Default for RouteLocation {
+    fn default() -> Self {
+        Self {
+            path: "/".to_string(),
+            query: HashMap::new(),
+            query_all: HashMap::new(),
+            fragment: None,
+        }
+    }
 }
 
 impl RouteLocation {
@@ -1579,10 +1600,16 @@ fn navigation_command_outcome(
     applied: bool,
 ) -> NavigationCommandOutcome {
     let state = navigation_state();
+    let location = parse_route_location(&state.current);
+    let route_fragment = location
+        .route_fragment()
+        .map(std::borrow::ToOwned::to_owned);
     NavigationCommandOutcome {
         kind,
         applied,
         current: state.current,
+        location,
+        route_fragment,
         history: state.history,
         modals: state.modals,
     }
@@ -3393,6 +3420,8 @@ mod tests {
         assert_eq!(outcome.kind, NavigationCommandKind::Navigate);
         assert!(outcome.applied);
         assert_eq!(outcome.current, "/orders");
+        assert_eq!(outcome.location.path, "/orders");
+        assert_eq!(outcome.route_fragment, None);
 
         super::reset_navigation_for_tests();
     }
@@ -3425,14 +3454,30 @@ mod tests {
         assert_eq!(outcomes[0].kind, NavigationCommandKind::Navigate);
         assert_eq!(outcomes[1].kind, NavigationCommandKind::SetQueryParamValues);
         assert_eq!(outcomes[1].current, "/orders/42?tag=paid&tag=pickup");
+        assert_eq!(outcomes[1].location.path, "/orders/42");
+        assert_eq!(
+            outcomes[1].location.query_values("tag"),
+            Some(&["paid".to_string(), "pickup".to_string()][..])
+        );
+        assert_eq!(outcomes[1].route_fragment, None);
         assert_eq!(outcomes[1].history, vec!["/orders/42?tag=paid&tag=pickup"]);
         assert_eq!(outcomes[2].kind, NavigationCommandKind::SetFragment);
         assert_eq!(
             outcomes[2].current,
             "/orders/42?tag=paid&tag=pickup#line%20item%207"
         );
+        assert_eq!(
+            outcomes[2].location.fragment.as_deref(),
+            Some("line item 7")
+        );
+        assert_eq!(outcomes[2].route_fragment.as_deref(), Some("line item 7"));
+        let outcome_json = serde_json::to_value(&outcomes[2]).expect("outcome should serialize");
+        assert_eq!(outcome_json["location"]["queryAll"]["tag"][0], "paid");
+        assert_eq!(outcome_json["routeFragment"], "line item 7");
         assert_eq!(outcomes[3].kind, NavigationCommandKind::RemoveFragment);
         assert_eq!(outcomes[3].current, "/orders/42?tag=paid&tag=pickup");
+        assert_eq!(outcomes[3].location.fragment, None);
+        assert_eq!(outcomes[3].route_fragment, None);
         assert_eq!(outcomes[4].modals, vec!["/filters".to_string()]);
         assert!(outcomes[5].applied);
         assert!(outcomes[5].modals.is_empty());
@@ -3446,8 +3491,40 @@ mod tests {
         assert_eq!(reset.kind, NavigationCommandKind::Reset);
         assert!(reset.applied);
         assert_eq!(reset.current, "/checkout");
+        assert_eq!(reset.location.path, "/checkout");
+        assert_eq!(reset.route_fragment, None);
         assert_eq!(reset.history, vec!["/checkout".to_string()]);
         assert!(!has_pending_route_result());
+
+        super::reset_navigation_for_tests();
+    }
+
+    #[test]
+    fn navigation_command_outcomes_report_hash_route_location() {
+        super::reset_navigation_for_tests();
+        reset_route("/#/checkout?step=pay");
+
+        let outcome = apply_navigation_command(NavigationCommand::SetFragment {
+            fragment: "notes".to_string(),
+            replace: true,
+        });
+        let outcome_json = serde_json::to_value(&outcome).expect("outcome should serialize");
+
+        assert_eq!(outcome.kind, NavigationCommandKind::SetFragment);
+        assert_eq!(outcome.current, "/#/checkout?step=pay#notes");
+        assert_eq!(outcome.location.path, "/checkout");
+        assert_eq!(outcome.location.query_value("step"), Some("pay"));
+        assert_eq!(
+            outcome.location.fragment.as_deref(),
+            Some("/checkout?step=pay#notes")
+        );
+        assert_eq!(outcome.route_fragment.as_deref(), Some("notes"));
+        assert_eq!(outcome_json["location"]["queryAll"]["step"][0], "pay");
+        assert_eq!(
+            outcome_json["location"]["fragment"],
+            "/checkout?step=pay#notes"
+        );
+        assert_eq!(outcome_json["routeFragment"], "notes");
 
         super::reset_navigation_for_tests();
     }

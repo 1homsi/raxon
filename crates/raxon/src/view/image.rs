@@ -3,7 +3,9 @@
 use std::sync::Arc;
 
 use crate::core::Color;
-use crate::dom::{Attribute, ImageErrorCallback, ImageLoadCallback, ImageResizeMode, Tree, WidgetId};
+use crate::dom::{
+    Attribute, ImageErrorCallback, ImageLoadCallback, ImageResizeMode, Tree, WidgetId,
+};
 
 use super::view::View;
 
@@ -62,7 +64,7 @@ impl Image {
 
     /// Called when the image loads successfully.
     ///
-    /// iOS: stub — TODO: wire up via image-load observer pattern.
+    /// iOS fires this for native asset/system-symbol and decoded raw-data loads.
     #[must_use]
     pub fn on_load(mut self, f: impl Fn() + Send + Sync + 'static) -> Self {
         self.on_load = Some(ImageLoadCallback(Arc::new(f)));
@@ -71,7 +73,7 @@ impl Image {
 
     /// Called when the image fails to load. The argument is a short error description.
     ///
-    /// iOS: stub — TODO: wire up via image-load observer pattern.
+    /// iOS fires this for missing native sources and undecodable raw image data.
     #[must_use]
     pub fn on_error(mut self, f: impl Fn(String) + Send + Sync + 'static) -> Self {
         self.on_error = Some(ImageErrorCallback(Arc::new(f)));

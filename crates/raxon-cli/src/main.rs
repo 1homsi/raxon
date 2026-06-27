@@ -568,7 +568,13 @@ fn rustup_toolchain_bin() -> Option<String> {
 fn wasm_pack_build(profile: BuildProfile, dry_run: bool) -> Result<(), i32> {
     let mut cmd = Command::new("wasm-pack");
     cmd.args([
-        "build", "--target", "web", "--out-name", "app", "--out-dir", "web/pkg",
+        "build",
+        "--target",
+        "web",
+        "--out-name",
+        "app",
+        "--out-dir",
+        "web/pkg",
     ]);
     cmd.arg(if matches!(profile, BuildProfile::Release) {
         "--release"
@@ -1338,7 +1344,8 @@ fn run_run(options: &RunOptions) {
             }
         }
         if options.watch && !options.dry_run {
-            if let Err(code) = serve_web_watching(&options.host, options.port, options.build.profile)
+            if let Err(code) =
+                serve_web_watching(&options.host, options.port, options.build.profile)
             {
                 process::exit(code);
             }
@@ -2525,8 +2532,14 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.Uri
 import android.os.Bundle
+import android.provider.OpenableColumns
+import android.util.Base64
 import android.view.Choreographer
 import android.widget.FrameLayout
 import org.json.JSONArray
@@ -2543,9 +2556,13 @@ open class __ANDROID_ACTIVITY__ : Activity() {
     protected lateinit var root: FrameLayout
         private set
     protected lateinit var host: __ANDROID_CLASS__
-        private set
+    private set
 
     private var running = false
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private var lastNetworkStatus: String? = null
+    private var lastLifecycleStatus: String? = null
+    private var pendingMediaMaxSelection = 1
     private val frameCallback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
             if (!running) return
@@ -2580,14 +2597,25 @@ open class __ANDROID_ACTIVITY__ : Activity() {
     override fun onResume() {
         super.onResume()
         startFrameLoop()
+        startNetworkMonitoring()
+        dispatchLifecycle("resumed")
     }
 
     override fun onPause() {
+        dispatchLifecycle("inactive")
+        stopNetworkMonitoring()
         stopFrameLoop()
         super.onPause()
     }
 
+    override fun onStop() {
+        dispatchLifecycle("backgrounded")
+        super.onStop()
+    }
+
     override fun onDestroy() {
+        dispatchLifecycle("terminating")
+        stopNetworkMonitoring()
         if (::host.isInitialized && host.handle != 0L) {
             host.destroy()
         }
@@ -2600,6 +2628,28 @@ open class __ANDROID_ACTIVITY__ : Activity() {
         } else {
             super.onBackPressed()
         }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        when (requestCode) {
+            REQUEST_RAXON_MEDIA_PICKER -> {
+                if (resultCode == RESULT_OK && data != null) {
+                    handleMediaPickerResult(data)
+                } else {
+                    dispatchMediaPickerCancelled()
+                }
+                return
+            }
+            REQUEST_RAXON_DOCUMENT_PICKER -> {
+                if (resultCode == RESULT_OK && data != null) {
+                    handleDocumentPickerResult(data)
+                } else {
+                    dispatchDocumentPicked(JSONArray())
+                }
+                return
+            }
+        }
+        super.onActivityResult(requestCode, resultCode, data)
     }
 
     protected open fun installDefaultPlatformHandlers(host: __ANDROID_CLASS__) {
@@ -2633,6 +2683,12 @@ open class __ANDROID_ACTIVITY__ : Activity() {
                         runCatching { root.context.startActivity(intent) }
                     }
                 }
+                "present_media_picker" -> {
+                    openMediaPicker(request.optInt("max_selection", 1).coerceAtLeast(1))
+                }
+                "present_document_picker" -> {
+                    openDocumentPicker(request.optJSONArray("types"))
+                }
             }
         }
     }
@@ -2641,6 +2697,8 @@ open class __ANDROID_ACTIVITY__ : Activity() {
         if (width <= 0f || height <= 0f) return
         if (host.handle == 0L) {
             host.mount(width, height)
+            reportNetworkStatus()
+            dispatchLifecycle("resumed")
         } else {
             host.resize(width, height)
         }
@@ -2659,8 +2717,210 @@ open class __ANDROID_ACTIVITY__ : Activity() {
         Choreographer.getInstance().removeFrameCallback(frameCallback)
     }
 
+    private fun startNetworkMonitoring() {
+        if (networkCallback != null) {
+            reportNetworkStatus()
+            return
+        }
+        val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) = reportNetworkStatus(connectivityManager)
+            override fun onLost(network: Network) = reportNetworkStatus(connectivityManager)
+            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) =
+                reportNetworkStatus(connectivityManager)
+        }
+
+        val registered = runCatching {
+            val request = NetworkRequest.Builder()
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .build()
+            connectivityManager.registerNetworkCallback(request, callback)
+        }.isSuccess
+
+        if (registered) {
+            networkCallback = callback
+        }
+        reportNetworkStatus(connectivityManager)
+    }
+
+    private fun stopNetworkMonitoring() {
+        val callback = networkCallback ?: return
+        val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        runCatching { connectivityManager.unregisterNetworkCallback(callback) }
+        networkCallback = null
+        lastNetworkStatus = null
+    }
+
+    private fun reportNetworkStatus(
+        connectivityManager: ConnectivityManager =
+            getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+    ) {
+        runOnUiThread {
+            if (!::host.isInitialized || host.handle == 0L) return@runOnUiThread
+            val status = currentNetworkStatus(connectivityManager)
+            if (status == lastNetworkStatus) return@runOnUiThread
+            lastNetworkStatus = status
+            host.dispatchEvents(
+                JSONArray().put(
+                    JSONObject()
+                        .put("type", "network_status_changed")
+                        .put("status", status)
+                )
+            )
+        }
+    }
+
+    private fun currentNetworkStatus(connectivityManager: ConnectivityManager): String {
+        val network = connectivityManager.activeNetwork ?: return "offline"
+        val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return "unknown"
+        val hasInternet = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        val isValidated = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+        if (!hasInternet || !isValidated) return "offline"
+
+        return when {
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wi_fi"
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
+            else -> "online"
+        }
+    }
+
+    private fun dispatchLifecycle(lifecycle: String) {
+        if (!::host.isInitialized || host.handle == 0L) return
+        if (lifecycle == lastLifecycleStatus) return
+        lastLifecycleStatus = lifecycle
+        host.dispatchEvents(
+            JSONArray().put(
+                JSONObject()
+                    .put("type", "app_lifecycle")
+                    .put("lifecycle", lifecycle)
+            )
+        )
+    }
+
+    private fun openMediaPicker(maxSelection: Int) {
+        pendingMediaMaxSelection = maxSelection
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "image/*"
+            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, maxSelection > 1)
+        }
+        runCatching { startActivityForResult(intent, REQUEST_RAXON_MEDIA_PICKER) }
+            .onFailure { dispatchMediaPickerCancelled() }
+    }
+
+    private fun openDocumentPicker(types: JSONArray?) {
+        val mimeTypes = androidMimeTypes(types)
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = if (mimeTypes.size == 1) mimeTypes[0] else "*/*"
+            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+            if (mimeTypes.size > 1) {
+                putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes.toTypedArray())
+            }
+        }
+        runCatching { startActivityForResult(intent, REQUEST_RAXON_DOCUMENT_PICKER) }
+            .onFailure { dispatchDocumentPicked(JSONArray()) }
+    }
+
+    private fun handleMediaPickerResult(data: Intent) {
+        val images = JSONArray()
+        for (uri in resultUris(data).take(pendingMediaMaxSelection)) {
+            readUriBase64(uri)?.let { images.put(it) }
+        }
+        if (images.length() == 0) {
+            dispatchMediaPickerCancelled()
+        } else {
+            host.dispatchEvents(
+                JSONArray().put(
+                    JSONObject()
+                        .put("type", "media_picked")
+                        .put("images", images)
+                )
+            )
+        }
+    }
+
+    private fun handleDocumentPickerResult(data: Intent) {
+        val files = JSONArray()
+        for (uri in resultUris(data)) {
+            val bytes = readUriBase64(uri) ?: continue
+            files.put(
+                JSONObject()
+                    .put("filename", displayName(uri))
+                    .put("bytes", bytes)
+            )
+        }
+        dispatchDocumentPicked(files)
+    }
+
+    private fun dispatchMediaPickerCancelled() {
+        if (!::host.isInitialized || host.handle == 0L) return
+        host.dispatchEvents(JSONArray().put(JSONObject().put("type", "media_picker_cancelled")))
+    }
+
+    private fun dispatchDocumentPicked(files: JSONArray) {
+        if (!::host.isInitialized || host.handle == 0L) return
+        host.dispatchEvents(
+            JSONArray().put(
+                JSONObject()
+                    .put("type", "document_picked")
+                    .put("files", files)
+            )
+        )
+    }
+
+    private fun resultUris(data: Intent): List<Uri> {
+        val clip = data.clipData
+        if (clip != null) {
+            return (0 until clip.itemCount).mapNotNull { index -> clip.getItemAt(index)?.uri }
+        }
+        return data.data?.let { listOf(it) } ?: emptyList()
+    }
+
+    private fun readUriBase64(uri: Uri): String? =
+        runCatching {
+            contentResolver.openInputStream(uri)?.use { input ->
+                Base64.encodeToString(input.readBytes(), Base64.NO_WRAP)
+            }
+        }.getOrNull()
+
+    private fun displayName(uri: Uri): String {
+        runCatching {
+            contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+                ?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                        if (index >= 0) {
+                            cursor.getString(index)?.takeIf { it.isNotBlank() }?.let { return it }
+                        }
+                    }
+                }
+        }
+        return uri.lastPathSegment?.takeIf { it.isNotBlank() } ?: "file"
+    }
+
+    private fun androidMimeTypes(types: JSONArray?): List<String> {
+        if (types == null || types.length() == 0) return emptyList()
+        return (0 until types.length())
+            .mapNotNull { index -> types.optString(index).takeIf { it.isNotBlank() } }
+            .map { type ->
+                when (type) {
+                    "public.image" -> "image/*"
+                    "public.jpeg" -> "image/jpeg"
+                    "public.png" -> "image/png"
+                    "public.movie", "public.video" -> "video/*"
+                    "public.pdf", "com.adobe.pdf" -> "application/pdf"
+                    "public.text" -> "text/*"
+                    else -> if ("/" in type) type else "*/*"
+                }
+            }
+            .distinct()
+    }
+
     companion object {
         const val NATIVE_LIBRARY: String = "__ANDROID_LIBRARY__"
+        private const val REQUEST_RAXON_MEDIA_PICKER = 7301
+        private const val REQUEST_RAXON_DOCUMENT_PICKER = 7302
     }
 }
 "#
@@ -2673,6 +2933,8 @@ open class __ANDROID_ACTIVITY__ : Activity() {
 fn android_manifest_template(options: &GenerateOptions) -> String {
     r#"<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
     <application
         android:allowBackup="true"
         android:label="@string/app_name"
@@ -2842,7 +3104,8 @@ module, or merge these files into an existing module. Override
 `{activity}.installDefaultPlatformHandlers` or set hooks on `{host_class}` for
 platform services and custom widgets. The generated Activity includes default
 handlers for clipboard writes, share text, external URLs, accessibility
-announcements, and focus requests.
+announcements, focus requests, network reachability, media picking, and document
+picking.
 "#,
         package_path = options.android_package.replace('.', "/"),
         host_class = options.android_class,
@@ -2929,6 +3192,33 @@ function fallbackClipboardText(text) {
   }
 }
 
+async function fileToBase64(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    const chunk = bytes.subarray(offset, offset + 0x8000);
+    binary += String.fromCharCode.apply(null, chunk);
+  }
+  return btoa(binary);
+}
+
+function webAcceptTypes(types) {
+  const mapped = (types ?? []).map((type) => {
+    switch (type) {
+      case "public.image": return "image/*";
+      case "public.jpeg": return "image/jpeg";
+      case "public.png": return "image/png";
+      case "public.movie":
+      case "public.video": return "video/*";
+      case "public.pdf":
+      case "com.adobe.pdf": return "application/pdf";
+      case "public.text": return "text/*";
+      default: return String(type || "").trim();
+    }
+  }).filter(Boolean);
+  return Array.from(new Set(mapped)).join(",");
+}
+
 export async function createRaxonWebHost(root, options = {}) {
   const module = options.wasm ?? await loadRaxonWasmModule(options);
   if (typeof module.default === "function" && options.initialize !== false) {
@@ -2985,11 +3275,16 @@ export class RaxonWebHost {
     this.installGestureHook = installGesture ?? (() => false);
     this.handlePlatformRequestHook = handlePlatformRequest ?? (() => false);
     this.liveRegion = null;
+    this.networkListenersInstalled = false;
+    this.lifecycleListenersInstalled = false;
+    this.lastLifecycleStatus = null;
   }
 
   mount(width = this.root.clientWidth, height = this.root.clientHeight) {
     if (!this.handle) {
       this.handle = BigInt(this.wasm.raxon_web_mount(width, height));
+      this.installNetworkStatusListeners();
+      this.installLifecycleListeners();
     }
     return this.handle;
   }
@@ -3021,7 +3316,78 @@ export class RaxonWebHost {
     });
   }
 
+  browserNetworkStatus() {
+    if (typeof navigator === "undefined" || typeof navigator.onLine !== "boolean") {
+      return "unknown";
+    }
+    return navigator.onLine ? "online" : "offline";
+  }
+
+  reportNetworkStatus() {
+    this.dispatchEvents([{ type: "network_status_changed", status: this.browserNetworkStatus() }]);
+  }
+
+  installNetworkStatusListeners() {
+    if (this.networkListenersInstalled || typeof window === "undefined") return;
+    this.networkListenersInstalled = true;
+    const report = () => this.reportNetworkStatus();
+    window.addEventListener("online", report);
+    window.addEventListener("offline", report);
+    this.listenerDisposers.set("__network_status", () => {
+      window.removeEventListener("online", report);
+      window.removeEventListener("offline", report);
+    });
+    report();
+  }
+
+  browserLifecycleStatus() {
+    if (typeof document === "undefined" || typeof document.visibilityState !== "string") {
+      return "resumed";
+    }
+    return document.visibilityState === "hidden" ? "backgrounded" : "resumed";
+  }
+
+  reportLifecycle(lifecycle = this.browserLifecycleStatus()) {
+    if (lifecycle === this.lastLifecycleStatus) return;
+    this.lastLifecycleStatus = lifecycle;
+    this.dispatchEvents([{ type: "app_lifecycle", lifecycle }]);
+  }
+
+  installLifecycleListeners() {
+    if (this.lifecycleListenersInstalled || typeof window === "undefined") return;
+    this.lifecycleListenersInstalled = true;
+    let unloading = false;
+    const reportVisibility = () => this.reportLifecycle(this.browserLifecycleStatus());
+    const reportResumed = () => {
+      unloading = false;
+      this.reportLifecycle("resumed");
+    };
+    const reportPageHide = () => {
+      if (!unloading) this.reportLifecycle("backgrounded");
+    };
+    const reportTerminating = () => {
+      unloading = true;
+      this.reportLifecycle("terminating");
+    };
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", reportVisibility);
+    }
+    window.addEventListener("pageshow", reportResumed);
+    window.addEventListener("pagehide", reportPageHide);
+    window.addEventListener("beforeunload", reportTerminating);
+    this.listenerDisposers.set("__app_lifecycle", () => {
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", reportVisibility);
+      }
+      window.removeEventListener("pageshow", reportResumed);
+      window.removeEventListener("pagehide", reportPageHide);
+      window.removeEventListener("beforeunload", reportTerminating);
+    });
+    reportVisibility();
+  }
+
   destroy() {
+    this.reportLifecycle("terminating");
     const reply = this.request({
       protocolVersion: 1,
       type: "destroy",
@@ -3029,7 +3395,14 @@ export class RaxonWebHost {
     });
     this.handle = 0n;
     for (const id of this.nodes.keys()) this.removeNodeListeners(id);
+    this.listenerDisposers.get("__network_status")?.();
+    this.listenerDisposers.delete("__network_status");
+    this.listenerDisposers.get("__app_lifecycle")?.();
+    this.listenerDisposers.delete("__app_lifecycle");
     this.nodes.clear();
+    this.networkListenersInstalled = false;
+    this.lifecycleListenersInstalled = false;
+    this.lastLifecycleStatus = null;
     this.root.replaceChildren();
     return reply;
   }
@@ -3176,8 +3549,187 @@ export class RaxonWebHost {
           window.open(String(request.url), "_blank", "noopener,noreferrer");
         }
         break;
+      case "present_media_picker":
+        this.presentMediaPicker(Number(request.max_selection ?? 1));
+        break;
+      case "present_document_picker":
+        this.presentDocumentPicker(Array.isArray(request.types) ? request.types : []);
+        break;
+      case "check_permission":
+        this.checkPermission(String(request.permission ?? "unknown"));
+        break;
+      case "request_permission":
+        this.requestPermission(String(request.permission ?? "unknown"));
+        break;
       default:
         console.warn("[raxon] unhandled platform request", request);
+    }
+  }
+
+  presentMediaPicker(maxSelection = 1) {
+    const limit = Math.max(1, Math.floor(maxSelection || 1));
+    this.presentFilePicker({
+      accept: "image/*",
+      multiple: limit > 1,
+      onCancel: () => this.dispatchEvents([{ type: "media_picker_cancelled" }]),
+      onFiles: async (files) => {
+        const images = [];
+        for (const file of files.slice(0, limit)) {
+          images.push(await fileToBase64(file));
+        }
+        if (images.length === 0) {
+          this.dispatchEvents([{ type: "media_picker_cancelled" }]);
+        } else {
+          this.dispatchEvents([{ type: "media_picked", images }]);
+        }
+      },
+    });
+  }
+
+  presentDocumentPicker(types = []) {
+    this.presentFilePicker({
+      accept: webAcceptTypes(types),
+      multiple: true,
+      onCancel: () => this.dispatchEvents([{ type: "document_picked", files: [] }]),
+      onFiles: async (files) => {
+        const picked = [];
+        for (const file of files) {
+          picked.push({
+            filename: file.name || "file",
+            bytes: await fileToBase64(file),
+          });
+        }
+        this.dispatchEvents([{ type: "document_picked", files: picked }]);
+      },
+    });
+  }
+
+  presentFilePicker({ accept = "", multiple = false, onFiles, onCancel }) {
+    if (typeof document === "undefined" || !document.body) {
+      onCancel();
+      return;
+    }
+    const input = document.createElement("input");
+    input.type = "file";
+    input.multiple = Boolean(multiple);
+    if (accept) input.accept = accept;
+    Object.assign(input.style, {
+      position: "fixed",
+      left: "-9999px",
+      top: "0",
+      opacity: "0",
+    });
+
+    let settled = false;
+    const cleanup = () => {
+      input.removeEventListener("change", onChange);
+      input.removeEventListener("cancel", onCancelEvent);
+      input.remove();
+    };
+    const cancel = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      onCancel();
+    };
+    const onCancelEvent = () => cancel();
+    const onChange = () => {
+      if (settled) return;
+      settled = true;
+      const files = Array.from(input.files ?? []);
+      cleanup();
+      if (files.length === 0) {
+        onCancel();
+        return;
+      }
+      Promise.resolve(onFiles(files)).catch((error) => {
+        console.warn("[raxon] file picker failed", error);
+        onCancel();
+      });
+    };
+
+    input.addEventListener("change", onChange);
+    input.addEventListener("cancel", onCancelEvent);
+    document.body.appendChild(input);
+    input.click();
+  }
+
+  reportPermission(permission, status) {
+    this.dispatchEvents([{ type: "permission_changed", permission, status }]);
+  }
+
+  browserPermissionName(permission) {
+    switch (permission) {
+      case "location": return "geolocation";
+      case "camera": return "camera";
+      case "microphone": return "microphone";
+      case "notifications": return "notifications";
+      case "motion": return "accelerometer";
+      default: return null;
+    }
+  }
+
+  mapBrowserPermissionState(state) {
+    switch (state) {
+      case "granted": return "granted";
+      case "denied": return "denied";
+      case "prompt": return "not_determined";
+      default: return "unknown";
+    }
+  }
+
+  async checkPermission(permission) {
+    if (permission === "photos") {
+      this.reportPermission(permission, "unsupported");
+      return;
+    }
+    const name = this.browserPermissionName(permission);
+    if (!name || typeof navigator === "undefined" || !navigator.permissions?.query) {
+      this.reportPermission(permission, name ? "unknown" : "unsupported");
+      return;
+    }
+    try {
+      const status = await navigator.permissions.query({ name });
+      this.reportPermission(permission, this.mapBrowserPermissionState(status.state));
+    } catch (_error) {
+      this.reportPermission(permission, "unknown");
+    }
+  }
+
+  async requestPermission(permission) {
+    try {
+      if (permission === "notifications" && typeof Notification !== "undefined" && Notification.requestPermission) {
+        const status = await Notification.requestPermission();
+        this.reportPermission(permission, this.mapBrowserPermissionState(status));
+        return;
+      }
+      if (permission === "location" && navigator.geolocation?.getCurrentPosition) {
+        await new Promise((resolve, reject) => navigator.geolocation.getCurrentPosition(resolve, reject));
+        this.reportPermission(permission, "granted");
+        return;
+      }
+      if ((permission === "camera" || permission === "microphone") && navigator.mediaDevices?.getUserMedia) {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: permission === "camera",
+          audio: permission === "microphone",
+        });
+        for (const track of stream.getTracks()) track.stop();
+        this.reportPermission(permission, "granted");
+        return;
+      }
+      if (permission === "motion") {
+        const motion = globalThis.DeviceMotionEvent;
+        if (typeof motion?.requestPermission === "function") {
+          const status = await motion.requestPermission();
+          this.reportPermission(permission, this.mapBrowserPermissionState(status));
+        } else {
+          this.reportPermission(permission, "granted");
+        }
+        return;
+      }
+      await this.checkPermission(permission);
+    } catch (_error) {
+      this.reportPermission(permission, "denied");
     }
   }
 
@@ -3271,6 +3823,9 @@ export class RaxonWebHost {
         break;
       case "opacity":
         node.style.opacity = String(attr.value);
+        break;
+      case "z_index":
+        node.style.zIndex = String(attr.value);
         break;
       case "font_weight":
         node.style.fontWeight = String(attr.value);
@@ -3517,6 +4072,9 @@ fn web_index_template(options: &GenerateOptions) -> String {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{title}</title>
+    <!-- Absolute base so assets resolve from the site root on nested client
+         routes served via the dev server's SPA fallback. -->
+    <base href="/" />
     <style>
       html,
       body,
@@ -3541,7 +4099,7 @@ fn web_index_template(options: &GenerateOptions) -> String {
   </head>
   <body>
     <main id="{root_id}"></main>
-    <script type="module" src="./main.js"></script>
+    <script type="module" src="/main.js"></script>
   </body>
 </html>
 "#,
@@ -4532,6 +5090,25 @@ name = "demo_native"
         assert!(activity.contains("DemoHost.loadLibrary(NATIVE_LIBRARY)"));
         assert!(activity.contains("const val NATIVE_LIBRARY: String = \"demo_lib\""));
         assert!(activity.contains("import android.content.ClipboardManager"));
+        assert!(activity.contains("import android.net.ConnectivityManager"));
+        assert!(activity.contains("import android.provider.OpenableColumns"));
+        assert!(activity.contains("import android.util.Base64"));
+        assert!(activity.contains("NetworkRequest.Builder()"));
+        assert!(activity.contains("startNetworkMonitoring()"));
+        assert!(activity.contains("\"network_status_changed\""));
+        assert!(activity.contains("\"wi_fi\""));
+        assert!(activity.contains("\"cellular\""));
+        assert!(activity.contains("override fun onStop()"));
+        assert!(activity.contains("\"app_lifecycle\""));
+        assert!(activity.contains("\"resumed\""));
+        assert!(activity.contains("\"backgrounded\""));
+        assert!(activity.contains("\"terminating\""));
+        assert!(activity.contains("\"present_media_picker\""));
+        assert!(activity.contains("ACTION_OPEN_DOCUMENT"));
+        assert!(activity.contains("\"media_picked\""));
+        assert!(activity.contains("\"media_picker_cancelled\""));
+        assert!(activity.contains("\"document_picked\""));
+        assert!(activity.contains("REQUEST_RAXON_DOCUMENT_PICKER"));
         assert!(activity.contains("\"set_clipboard\""));
         assert!(activity.contains("clipboard.setPrimaryClip"));
         assert!(activity.contains("\"share_text\""));
@@ -4545,6 +5122,7 @@ name = "demo_native"
 
         let manifest =
             fs::read_to_string(out_dir.join("android/app/src/main/AndroidManifest.xml")).unwrap();
+        assert!(manifest.contains("android.permission.ACCESS_NETWORK_STATE"));
         assert!(manifest.contains("android:name=\"dev.raxon.demo.DemoActivity\""));
 
         let settings = fs::read_to_string(out_dir.join("android/settings.gradle.kts")).unwrap();
@@ -4585,7 +5163,21 @@ name = "demo_native"
         assert!(web_js.contains("command.css_color"));
         assert!(web_js.contains("installBuiltInListeners"));
         assert!(web_js.contains("type: \"text_changed\""));
+        assert!(web_js.contains("installNetworkStatusListeners"));
+        assert!(web_js.contains("type: \"network_status_changed\""));
+        assert!(web_js.contains("installLifecycleListeners"));
+        assert!(web_js.contains("type: \"app_lifecycle\""));
+        assert!(web_js.contains("visibilitychange"));
+        assert!(web_js.contains("beforeunload"));
+        assert!(web_js.contains("fileToBase64(file)"));
+        assert!(web_js.contains("presentMediaPicker"));
+        assert!(web_js.contains("type: \"media_picked\""));
+        assert!(web_js.contains("type: \"media_picker_cancelled\""));
+        assert!(web_js.contains("presentDocumentPicker"));
+        assert!(web_js.contains("type: \"document_picked\""));
         assert!(web_js.contains("node.style.color = attr.value"));
+        assert!(web_js.contains("case \"z_index\""));
+        assert!(web_js.contains("node.style.zIndex = String(attr.value)"));
         assert!(web_js.contains("handlePlatformRequest(command.request ?? command)"));
         assert!(web_js.contains("case \"set_clipboard\""));
         assert!(web_js.contains("writeClipboardText(String(request.text ?? \"\"))"));
@@ -4600,7 +5192,9 @@ name = "demo_native"
 
         let web_index = fs::read_to_string(out_dir.join("web/index.html")).unwrap();
         assert!(web_index.contains("<title>Demo App</title>"));
+        assert!(web_index.contains("<base href=\"/\" />"));
         assert!(web_index.contains("id=\"demo_root\""));
+        assert!(web_index.contains("src=\"/main.js\""));
 
         let web_main = fs::read_to_string(out_dir.join("web/main.js")).unwrap();
         assert!(web_main.contains("import { raxonWebBuild } from \"./raxon-web-build.js\""));

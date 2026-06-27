@@ -15,12 +15,17 @@ use std::sync::Mutex;
 
 use crate::core::{Color, ColorScheme, EdgeInsets, Rect, Size};
 use crate::dom::{Event, EventKind, EventSink, Host, Tree, WidgetId, WidgetKind};
-use crate::reactive::{create_memo, create_root, create_signal, provide_context, use_context, Memo, Scope, Signal};
+use crate::reactive::{
+    create_global_signal, create_memo, create_root, create_signal, provide_context, use_context,
+    Memo, Scope, Signal,
+};
 use crate::view::{mount, View};
 
-
 // Re-export so callers can name the type without reaching into rax-dom.
-pub use crate::dom::{HapticStyle, KeyboardType, LocalNotification, TextStyle};
+pub use crate::dom::{
+    HapticStyle, KeyboardType, Lifecycle, LocalNotification, NetworkStatus, PermissionKind,
+    PermissionStatus, TextStyle,
+};
 
 thread_local! {
     /// Haptic pulses queued by [`haptic`] during event handlers. Drained by
@@ -55,6 +60,14 @@ thread_local! {
 
     /// Biometric authentication reasons queued by [`authenticate_biometric`]. Drained by [`App::tick`].
     static PENDING_BIOMETRICS: RefCell<Vec<String>> =
+        const { RefCell::new(Vec::new()) };
+
+    /// Permission status checks queued by [`check_permission`]. Drained by [`App::tick`].
+    static PENDING_PERMISSION_CHECKS: RefCell<Vec<PermissionKind>> =
+        const { RefCell::new(Vec::new()) };
+
+    /// Permission prompts queued by [`request_permission`]. Drained by [`App::tick`].
+    static PENDING_PERMISSION_REQUESTS: RefCell<Vec<PermissionKind>> =
         const { RefCell::new(Vec::new()) };
 
     /// Whether a location-start was requested (via [`start_location`]). Drained by [`App::tick`].
@@ -103,6 +116,11 @@ thread_local! {
     /// [`update_network_status`].
     static NETWORK_STATUS: Cell<Option<Signal<NetworkStatus>>> = const { Cell::new(None) };
 
+    /// Reactive signal for app lifecycle state. Lazily initialised by
+    /// [`use_app_lifecycle`]; updated by the platform backend via
+    /// [`update_app_lifecycle`].
+    static APP_LIFECYCLE: Cell<Option<Signal<Lifecycle>>> = const { Cell::new(None) };
+
     /// Reactive signal for the current on-screen keyboard height in logical
     /// pixels. Zero when the keyboard is hidden. Lazily initialised by
     /// [`use_keyboard_height`]; updated by the platform backend via
@@ -136,6 +154,10 @@ thread_local! {
     /// [`use_push_token`]; updated by [`update_push_token`] / cleared by
     /// [`clear_push_token`].
     static PUSH_TOKEN: Cell<Option<Signal<Option<String>>>> = const { Cell::new(None) };
+
+    /// Reactive permission status signals keyed by permission kind.
+    static PERMISSION_STATUS: RefCell<HashMap<PermissionKind, Signal<PermissionStatus>>> =
+        RefCell::new(HashMap::new());
 
     /// Pending torch state queued by [`set_torch`]. `None` means no change;
     /// `Some(true/false)` is drained by [`App::tick`] and forwarded to the backend.
@@ -281,24 +303,50 @@ pub fn authenticate_biometric(reason: impl Into<String>) {
     PENDING_BIOMETRICS.with(|q| q.borrow_mut().push(reason.into()));
 }
 
+/// Returns a reactive signal for the latest known platform permission status.
+///
+/// The initial value is [`PermissionStatus::Unknown`]. Call
+/// [`check_permission`] to refresh without prompting, or [`request_permission`]
+/// to ask the user where the platform supports a prompt.
+///
+/// Must be called while building views under a running [`App`].
+pub fn use_permission(permission: PermissionKind) -> Signal<PermissionStatus> {
+    PERMISSION_STATUS.with(|statuses| {
+        let mut statuses = statuses.borrow_mut();
+        if let Some(sig) = statuses.get(&permission).copied() {
+            return sig;
+        }
+        let sig = create_global_signal(PermissionStatus::Unknown);
+        statuses.insert(permission, sig);
+        sig
+    })
+}
+
+/// Called by platform backends when a permission status is known.
+/// App code should normally use [`check_permission`] or [`request_permission`].
+pub fn update_permission(permission: PermissionKind, status: PermissionStatus) {
+    PERMISSION_STATUS.with(|statuses| {
+        if let Some(sig) = statuses.borrow().get(&permission).copied() {
+            sig.set(status);
+        }
+    });
+}
+
+/// Checks a platform permission without showing a prompt. The result is
+/// delivered as [`Event::PermissionChanged`] and updates [`use_permission`].
+pub fn check_permission(permission: PermissionKind) {
+    PENDING_PERMISSION_CHECKS.with(|q| q.borrow_mut().push(permission));
+}
+
+/// Requests a platform permission from the user. The result is delivered as
+/// [`Event::PermissionChanged`] and updates [`use_permission`].
+pub fn request_permission(permission: PermissionKind) {
+    PENDING_PERMISSION_REQUESTS.with(|q| q.borrow_mut().push(permission));
+}
+
 // ---------------------------------------------------------------------------
 // Device API helpers
 // ---------------------------------------------------------------------------
-
-/// Network reachability state reported by the platform backend.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum NetworkStatus {
-    /// Reachability has not been determined yet.
-    Unknown,
-    /// The device has an active internet connection (type unknown).
-    Online,
-    /// The device has no internet connection.
-    Offline,
-    /// Connected via Wi-Fi.
-    WiFi,
-    /// Connected via cellular (mobile data).
-    Cellular,
-}
 
 /// GPS location fix reported by the platform backend.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -627,6 +675,42 @@ pub fn update_network_status(status: NetworkStatus) {
     NETWORK_STATUS.with(|slot| {
         if let Some(sig) = slot.get() {
             sig.set(status);
+        }
+    });
+}
+
+/// Returns a reactive `Signal<Lifecycle>` that reflects whether the app is
+/// foregrounded, inactive, backgrounded, or terminating.
+///
+/// The signal starts as [`Lifecycle::Resumed`] because views are built while the
+/// app is mounted and interactive. Platform hosts update it through
+/// [`Event::AppLifecycle`](crate::dom::Event::AppLifecycle).
+///
+/// Must be called while building views under a running [`App`].
+///
+/// ```no_run
+/// use raxon::runtime::{use_app_lifecycle, Lifecycle};
+///
+/// let lifecycle = use_app_lifecycle();
+/// // lifecycle.get() -> Lifecycle::Resumed
+/// ```
+pub fn use_app_lifecycle() -> Signal<Lifecycle> {
+    APP_LIFECYCLE.with(|slot| {
+        if let Some(sig) = slot.get() {
+            return sig;
+        }
+        let sig = create_signal(Lifecycle::Resumed);
+        slot.set(Some(sig));
+        sig
+    })
+}
+
+/// Called by platform backends when the app lifecycle changes. App code should
+/// normally read [`use_app_lifecycle`] instead of calling this directly.
+pub fn update_app_lifecycle(lifecycle: Lifecycle) {
+    APP_LIFECYCLE.with(|slot| {
+        if let Some(sig) = slot.get() {
+            sig.set(lifecycle);
         }
     });
 }
@@ -989,6 +1073,63 @@ impl App {
                 });
             }
         });
+        app.tree.on_global(EventKind::PermissionChanged, |event| {
+            if let Event::PermissionChanged { permission, status } = *event {
+                update_permission(permission, status);
+            }
+        });
+        app.tree
+            .on_global(EventKind::NetworkStatusChanged, |event| {
+                if let Event::NetworkStatusChanged { status } = *event {
+                    update_network_status(status);
+                }
+            });
+        app.tree.on_global(EventKind::AppLifecycle, |event| {
+            if let Event::AppLifecycle(lifecycle) = *event {
+                update_app_lifecycle(lifecycle);
+            }
+        });
+        app.tree.on_global(EventKind::LocationUpdated, |event| {
+            if let Event::LocationUpdated {
+                latitude,
+                longitude,
+                accuracy,
+            } = *event
+            {
+                update_location(GeoLocation {
+                    latitude,
+                    longitude,
+                    altitude: 0.0,
+                    accuracy,
+                    speed: -1.0,
+                });
+            }
+        });
+        app.tree.on_global(EventKind::LocationDenied, |_event| {
+            LOCATION.with(|slot| {
+                if let Some(sig) = slot.get() {
+                    sig.set(None);
+                }
+            });
+        });
+        app.tree.on_global(EventKind::MotionUpdated, |event| {
+            if let Event::MotionUpdated {
+                accel_x,
+                accel_y,
+                accel_z,
+                gyro_x,
+                gyro_y,
+                gyro_z,
+            } = *event
+            {
+                if let (Some(x), Some(y), Some(z)) = (accel_x, accel_y, accel_z) {
+                    update_accelerometer(AccelerometerData { x, y, z });
+                }
+                if let (Some(x), Some(y), Some(z)) = (gyro_x, gyro_y, gyro_z) {
+                    update_gyroscope(GyroscopeData { x, y, z });
+                }
+            }
+        });
         app.tree.run_dynamic(); // materialize dynamic subtrees before first layout
         app.refresh_backdrop();
         app.relayout();
@@ -1147,6 +1288,22 @@ impl App {
             self.tree.authenticate_biometric(reason);
         }
 
+        // Drain permission checks/requests queued by app code.
+        let permission_checks: Vec<PermissionKind> = PENDING_PERMISSION_CHECKS.with(|q| {
+            let mut v = q.borrow_mut();
+            std::mem::take(&mut *v)
+        });
+        for permission in permission_checks {
+            self.tree.check_permission(permission);
+        }
+        let permission_requests: Vec<PermissionKind> = PENDING_PERMISSION_REQUESTS.with(|q| {
+            let mut v = q.borrow_mut();
+            std::mem::take(&mut *v)
+        });
+        for permission in permission_requests {
+            self.tree.request_permission(permission);
+        }
+
         // Drain location start/stop requests.
         let want_start = PENDING_LOCATION_STARTS.with(|q| {
             let v = *q.borrow();
@@ -1180,41 +1337,36 @@ impl App {
         }
 
         // Drain background task registrations.
-        let bg_regs: Vec<String> = PENDING_BG_REGISTRATIONS.with(|q| {
-            std::mem::take(&mut *q.borrow_mut())
-        });
+        let bg_regs: Vec<String> =
+            PENDING_BG_REGISTRATIONS.with(|q| std::mem::take(&mut *q.borrow_mut()));
         for id in bg_regs {
             self.tree.register_background_task(id);
         }
 
         // Drain background task schedule requests.
-        let bg_scheds: Vec<(String, f64)> = PENDING_BG_SCHEDULES.with(|q| {
-            std::mem::take(&mut *q.borrow_mut())
-        });
+        let bg_scheds: Vec<(String, f64)> =
+            PENDING_BG_SCHEDULES.with(|q| std::mem::take(&mut *q.borrow_mut()));
         for (id, secs) in bg_scheds {
             self.tree.schedule_background_task(id, secs);
         }
 
         // Drain clipboard writes queued by set_clipboard().
-        let clipboard_writes: Vec<String> = PENDING_CLIPBOARD_WRITES.with(|q| {
-            std::mem::take(&mut *q.borrow_mut())
-        });
+        let clipboard_writes: Vec<String> =
+            PENDING_CLIPBOARD_WRITES.with(|q| std::mem::take(&mut *q.borrow_mut()));
         for text in clipboard_writes {
             self.tree.set_clipboard(text);
         }
 
         // Drain share-sheet texts queued by share_text().
-        let share_texts: Vec<String> = PENDING_SHARE_TEXTS.with(|q| {
-            std::mem::take(&mut *q.borrow_mut())
-        });
+        let share_texts: Vec<String> =
+            PENDING_SHARE_TEXTS.with(|q| std::mem::take(&mut *q.borrow_mut()));
         for text in share_texts {
             self.tree.share_text(text);
         }
 
         // Drain external URLs queued by open_external_url().
-        let external_urls: Vec<String> = PENDING_EXTERNAL_URLS.with(|q| {
-            std::mem::take(&mut *q.borrow_mut())
-        });
+        let external_urls: Vec<String> =
+            PENDING_EXTERNAL_URLS.with(|q| std::mem::take(&mut *q.borrow_mut()));
         for url in external_urls {
             self.tree.open_external_url(url);
         }

@@ -14,7 +14,7 @@ use std::rc::Rc;
 use crate::core::{Color, Rect, Size};
 use crate::dom::{
     Attribute, Backend, Event, EventSink, GestureKind, HapticStyle, Host, LocalNotification,
-    Mutation, WidgetId, WidgetKind,
+    Mutation, PermissionKind, WidgetId, WidgetKind,
 };
 use crate::runtime::App;
 use crate::view::View;
@@ -290,6 +290,12 @@ impl AndroidCommand {
             Mutation::AuthenticateBiometric { reason } => {
                 AndroidCommand::Request(AndroidPlatformRequest::AuthenticateBiometric { reason })
             }
+            Mutation::CheckPermission { permission } => {
+                AndroidCommand::Request(AndroidPlatformRequest::CheckPermission { permission })
+            }
+            Mutation::RequestPermission { permission } => {
+                AndroidCommand::Request(AndroidPlatformRequest::RequestPermission { permission })
+            }
             Mutation::StartLocation | Mutation::RequestLocation => {
                 AndroidCommand::Request(AndroidPlatformRequest::StartLocation)
             }
@@ -551,6 +557,12 @@ pub enum AndroidWirePlatformRequest {
     AuthenticateBiometric {
         reason: String,
     },
+    CheckPermission {
+        permission: PermissionKind,
+    },
+    RequestPermission {
+        permission: PermissionKind,
+    },
     StartLocation,
     StopLocation,
     StartMotion {
@@ -611,6 +623,12 @@ impl From<AndroidPlatformRequest> for AndroidWirePlatformRequest {
             }
             AndroidPlatformRequest::AuthenticateBiometric { reason } => {
                 AndroidWirePlatformRequest::AuthenticateBiometric { reason }
+            }
+            AndroidPlatformRequest::CheckPermission { permission } => {
+                AndroidWirePlatformRequest::CheckPermission { permission }
+            }
+            AndroidPlatformRequest::RequestPermission { permission } => {
+                AndroidWirePlatformRequest::RequestPermission { permission }
             }
             AndroidPlatformRequest::StartLocation => AndroidWirePlatformRequest::StartLocation,
             AndroidPlatformRequest::StopLocation => AndroidWirePlatformRequest::StopLocation,
@@ -1108,9 +1126,9 @@ fn android_wire_attribute(attr: Attribute) -> AndroidWireAttribute {
         Attribute::ImageOnError(_) => AndroidWireAttribute::EventListener {
             event: "image_error".to_string(),
         },
-        Attribute::DrawList(cmds) => AndroidWireAttribute::DrawList(
-            cmds.into_iter().map(android_wire_draw_cmd).collect(),
-        ),
+        Attribute::DrawList(cmds) => {
+            AndroidWireAttribute::DrawList(cmds.into_iter().map(android_wire_draw_cmd).collect())
+        }
         Attribute::ContextMenu(items) => AndroidWireAttribute::ContextMenu(
             items.into_iter().map(android_wire_menu_item).collect(),
         ),
@@ -1127,7 +1145,14 @@ fn android_wire_stroke(stroke: crate::dom::Stroke) -> AndroidWireStroke {
 fn android_wire_draw_cmd(cmd: crate::dom::DrawCmd) -> AndroidWireDrawCmd {
     use crate::dom::DrawCmd;
     match cmd {
-        DrawCmd::Line { x1, y1, x2, y2, width, color } => AndroidWireDrawCmd::Line {
+        DrawCmd::Line {
+            x1,
+            y1,
+            x2,
+            y2,
+            width,
+            color,
+        } => AndroidWireDrawCmd::Line {
             x1,
             y1,
             x2,
@@ -1135,7 +1160,15 @@ fn android_wire_draw_cmd(cmd: crate::dom::DrawCmd) -> AndroidWireDrawCmd {
             width,
             color_argb: color.to_argb_u32(),
         },
-        DrawCmd::Rect { x, y, w, h, radius, fill, stroke } => AndroidWireDrawCmd::Rect {
+        DrawCmd::Rect {
+            x,
+            y,
+            w,
+            h,
+            radius,
+            fill,
+            stroke,
+        } => AndroidWireDrawCmd::Rect {
             x,
             y,
             w,
@@ -1144,20 +1177,38 @@ fn android_wire_draw_cmd(cmd: crate::dom::DrawCmd) -> AndroidWireDrawCmd {
             fill_argb: fill.map(Color::to_argb_u32),
             stroke: stroke.map(android_wire_stroke),
         },
-        DrawCmd::Circle { cx, cy, r, fill, stroke } => AndroidWireDrawCmd::Circle {
+        DrawCmd::Circle {
+            cx,
+            cy,
+            r,
+            fill,
+            stroke,
+        } => AndroidWireDrawCmd::Circle {
             cx,
             cy,
             r,
             fill_argb: fill.map(Color::to_argb_u32),
             stroke: stroke.map(android_wire_stroke),
         },
-        DrawCmd::Path { points, closed, fill, stroke } => AndroidWireDrawCmd::Path {
+        DrawCmd::Path {
+            points,
+            closed,
+            fill,
+            stroke,
+        } => AndroidWireDrawCmd::Path {
             points: points.into_iter().map(|(x, y)| [x, y]).collect(),
             closed,
             fill_argb: fill.map(Color::to_argb_u32),
             stroke: stroke.map(android_wire_stroke),
         },
-        DrawCmd::Text { x, y, text, size, color, align } => AndroidWireDrawCmd::Text {
+        DrawCmd::Text {
+            x,
+            y,
+            text,
+            size,
+            color,
+            align,
+        } => AndroidWireDrawCmd::Text {
             x,
             y,
             text,
@@ -1215,6 +1266,16 @@ pub enum AndroidPlatformRequest {
     AuthenticateBiometric {
         /// Prompt reason.
         reason: String,
+    },
+    /// Check a platform permission without prompting.
+    CheckPermission {
+        /// Permission to check.
+        permission: PermissionKind,
+    },
+    /// Request a platform permission.
+    RequestPermission {
+        /// Permission to request.
+        permission: PermissionKind,
     },
     /// Start location updates.
     StartLocation,

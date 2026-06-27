@@ -14,7 +14,7 @@ use std::rc::Rc;
 use crate::core::{Color, Rect, Size};
 use crate::dom::{
     Attribute, Backend, Event, EventSink, GestureKind, HapticStyle, Host, LocalNotification,
-    Mutation, WidgetId, WidgetKind,
+    Mutation, PermissionKind, WidgetId, WidgetKind,
 };
 use crate::runtime::App;
 use crate::view::View;
@@ -304,6 +304,12 @@ impl DomCommand {
             Mutation::AuthenticateBiometric { reason } => {
                 DomCommand::Request(WebPlatformRequest::AuthenticateBiometric { reason })
             }
+            Mutation::CheckPermission { permission } => {
+                DomCommand::Request(WebPlatformRequest::CheckPermission { permission })
+            }
+            Mutation::RequestPermission { permission } => {
+                DomCommand::Request(WebPlatformRequest::RequestPermission { permission })
+            }
             Mutation::StartLocation | Mutation::RequestLocation => {
                 DomCommand::Request(WebPlatformRequest::StartLocation)
             }
@@ -565,6 +571,12 @@ pub enum DomWirePlatformRequest {
     AuthenticateBiometric {
         reason: String,
     },
+    CheckPermission {
+        permission: PermissionKind,
+    },
+    RequestPermission {
+        permission: PermissionKind,
+    },
     StartLocation,
     StopLocation,
     StartMotion {
@@ -625,6 +637,12 @@ impl From<WebPlatformRequest> for DomWirePlatformRequest {
             }
             WebPlatformRequest::AuthenticateBiometric { reason } => {
                 DomWirePlatformRequest::AuthenticateBiometric { reason }
+            }
+            WebPlatformRequest::CheckPermission { permission } => {
+                DomWirePlatformRequest::CheckPermission { permission }
+            }
+            WebPlatformRequest::RequestPermission { permission } => {
+                DomWirePlatformRequest::RequestPermission { permission }
             }
             WebPlatformRequest::StartLocation => DomWirePlatformRequest::StartLocation,
             WebPlatformRequest::StopLocation => DomWirePlatformRequest::StopLocation,
@@ -1136,7 +1154,14 @@ fn dom_wire_stroke(stroke: crate::dom::Stroke) -> DomWireStroke {
 fn dom_wire_draw_cmd(cmd: crate::dom::DrawCmd) -> DomWireDrawCmd {
     use crate::dom::DrawCmd;
     match cmd {
-        DrawCmd::Line { x1, y1, x2, y2, width, color } => DomWireDrawCmd::Line {
+        DrawCmd::Line {
+            x1,
+            y1,
+            x2,
+            y2,
+            width,
+            color,
+        } => DomWireDrawCmd::Line {
             x1,
             y1,
             x2,
@@ -1144,7 +1169,15 @@ fn dom_wire_draw_cmd(cmd: crate::dom::DrawCmd) -> DomWireDrawCmd {
             width,
             color: color_to_css(color),
         },
-        DrawCmd::Rect { x, y, w, h, radius, fill, stroke } => DomWireDrawCmd::Rect {
+        DrawCmd::Rect {
+            x,
+            y,
+            w,
+            h,
+            radius,
+            fill,
+            stroke,
+        } => DomWireDrawCmd::Rect {
             x,
             y,
             w,
@@ -1153,20 +1186,38 @@ fn dom_wire_draw_cmd(cmd: crate::dom::DrawCmd) -> DomWireDrawCmd {
             fill: fill.map(color_to_css),
             stroke: stroke.map(dom_wire_stroke),
         },
-        DrawCmd::Circle { cx, cy, r, fill, stroke } => DomWireDrawCmd::Circle {
+        DrawCmd::Circle {
+            cx,
+            cy,
+            r,
+            fill,
+            stroke,
+        } => DomWireDrawCmd::Circle {
             cx,
             cy,
             r,
             fill: fill.map(color_to_css),
             stroke: stroke.map(dom_wire_stroke),
         },
-        DrawCmd::Path { points, closed, fill, stroke } => DomWireDrawCmd::Path {
+        DrawCmd::Path {
+            points,
+            closed,
+            fill,
+            stroke,
+        } => DomWireDrawCmd::Path {
             points: points.into_iter().map(|(x, y)| [x, y]).collect(),
             closed,
             fill: fill.map(color_to_css),
             stroke: stroke.map(dom_wire_stroke),
         },
-        DrawCmd::Text { x, y, text, size, color, align } => DomWireDrawCmd::Text {
+        DrawCmd::Text {
+            x,
+            y,
+            text,
+            size,
+            color,
+            align,
+        } => DomWireDrawCmd::Text {
             x,
             y,
             text,
@@ -1203,6 +1254,16 @@ pub enum WebPlatformRequest {
     AuthenticateBiometric {
         /// Prompt reason.
         reason: String,
+    },
+    /// Check a browser/platform permission without prompting.
+    CheckPermission {
+        /// Permission to check.
+        permission: PermissionKind,
+    },
+    /// Request a browser/platform permission.
+    RequestPermission {
+        /// Permission to request.
+        permission: PermissionKind,
     },
     /// Start geolocation updates.
     StartLocation,
@@ -1513,6 +1574,41 @@ mod browser_history {
             .unwrap_or_else(|| "/".to_string())
     }
 
+    /// The current URL search string without the leading `?`.
+    pub fn location_search() -> String {
+        web_sys::window()
+            .and_then(|w| w.location().search().ok())
+            .map(|search| search.trim_start_matches('?').to_string())
+            .unwrap_or_default()
+    }
+
+    /// The current URL hash string without the leading `#`.
+    pub fn location_hash() -> String {
+        web_sys::window()
+            .and_then(|w| w.location().hash().ok())
+            .map(|hash| hash.trim_start_matches('#').to_string())
+            .unwrap_or_default()
+    }
+
+    /// The current route string: `pathname + search + hash`.
+    pub fn location_route() -> String {
+        let Some(window) = web_sys::window() else {
+            return "/".to_string();
+        };
+        let location = window.location();
+        let mut route = location.pathname().unwrap_or_else(|_| "/".to_string());
+        if route.is_empty() {
+            route.push('/');
+        }
+        if let Ok(search) = location.search() {
+            route.push_str(&search);
+        }
+        if let Ok(hash) = location.hash() {
+            route.push_str(&hash);
+        }
+        route
+    }
+
     /// Pushes a new history entry with `path` (adds a back-stack entry).
     pub fn push_path(path: &str) {
         if let Some(history) = web_sys::window().and_then(|w| w.history().ok()) {
@@ -1532,9 +1628,9 @@ mod browser_history {
         static POPSTATE_HOOKS: RefCell<Vec<Closure<dyn FnMut()>>> = const { RefCell::new(Vec::new()) };
     }
 
-    /// Invokes `callback(path)` on browser back/forward navigation.
+    /// Invokes `callback(route)` on browser back/forward navigation.
     pub fn on_popstate(callback: impl Fn(String) + 'static) {
-        let closure = Closure::<dyn FnMut()>::new(move || callback(location_path()));
+        let closure = Closure::<dyn FnMut()>::new(move || callback(location_route()));
         if let Some(window) = web_sys::window() {
             let _ = window
                 .add_event_listener_with_callback("popstate", closure.as_ref().unchecked_ref());
@@ -1545,11 +1641,32 @@ mod browser_history {
 
 /// The current URL path. Returns `"/"` off the web.
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
-pub use browser_history::{location_path, on_popstate, push_path, replace_path};
+pub use browser_history::{
+    location_hash, location_path, location_route, location_search, on_popstate, push_path,
+    replace_path,
+};
 
 /// The current URL path. Returns `"/"` off the web.
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 pub fn location_path() -> String {
+    "/".to_string()
+}
+
+/// The current URL search string without the leading `?`. Returns `""` off the web.
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+pub fn location_search() -> String {
+    String::new()
+}
+
+/// The current URL hash string without the leading `#`. Returns `""` off the web.
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+pub fn location_hash() -> String {
+    String::new()
+}
+
+/// The current route string (`pathname + search + hash`). Returns `"/"` off the web.
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+pub fn location_route() -> String {
     "/".to_string()
 }
 

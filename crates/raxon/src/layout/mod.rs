@@ -157,10 +157,10 @@ fn to_taffy_style(style: LayoutStyle) -> Style {
             bottom: length(style.margin.bottom),
         },
         inset: taffy::Rect {
-            left: length(style.inset.left),
-            right: length(style.inset.right),
-            top: length(style.inset.top),
-            bottom: length(style.inset.bottom),
+            left: inset_len(style.inset.left),
+            right: inset_len(style.inset.right),
+            top: inset_len(style.inset.top),
+            bottom: inset_len(style.inset.bottom),
         },
         gap: taffy::Size {
             width: length(style.gap),
@@ -226,6 +226,17 @@ fn to_dim(d: crate::core::Dimension) -> Dimension {
     }
 }
 
+/// Maps an inset edge to a taffy length, treating `NaN` as `auto` so an absolute
+/// node can anchor to only some edges (e.g. top + right) and size to content on
+/// the others — the basis for corner-anchored popovers/dropdowns.
+fn inset_len(v: f32) -> taffy::LengthPercentageAuto {
+    if v.is_nan() {
+        taffy::LengthPercentageAuto::Auto
+    } else {
+        taffy::LengthPercentageAuto::Length(v)
+    }
+}
+
 /// Intrinsic size for a leaf, estimated from its text and font size. A known
 /// (stretched) dimension always wins; otherwise we fall back to the content
 /// estimate — which is what makes rows and centered content lay out correctly.
@@ -269,7 +280,14 @@ fn measure_leaf(
         WidgetKind::DatePicker => (180.0, line_h.max(34.0)),
         // TextArea grows to fill; give a sensible minimum height.
         WidgetKind::TextArea => (180.0, line_h.max(80.0)),
-        WidgetKind::View | WidgetKind::Scroll | WidgetKind::Stack | WidgetKind::Camera | WidgetKind::WebView | WidgetKind::LazyList | WidgetKind::MapView | WidgetKind::Canvas => (0.0, 0.0),
+        WidgetKind::View
+        | WidgetKind::Scroll
+        | WidgetKind::Stack
+        | WidgetKind::Camera
+        | WidgetKind::WebView
+        | WidgetKind::LazyList
+        | WidgetKind::MapView
+        | WidgetKind::Canvas => (0.0, 0.0),
     };
 
     taffy::Size {

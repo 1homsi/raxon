@@ -207,7 +207,10 @@ impl Tree {
 
     /// Starts CoreMotion sensor updates. Results arrive as global `Event::MotionUpdated`.
     pub fn start_motion(&mut self, accelerometer: bool, gyroscope: bool) {
-        self.host.emit(Mutation::StartMotion { accelerometer, gyroscope });
+        self.host.emit(Mutation::StartMotion {
+            accelerometer,
+            gyroscope,
+        });
     }
 
     /// Stops CoreMotion sensor updates.
@@ -248,10 +251,21 @@ impl Tree {
         self.host.emit(Mutation::AuthenticateBiometric { reason });
     }
 
+    /// Queries the current authorization state for a platform permission.
+    pub fn check_permission(&mut self, permission: super::mutation::PermissionKind) {
+        self.host.emit(Mutation::CheckPermission { permission });
+    }
+
+    /// Requests a platform permission from the user.
+    pub fn request_permission(&mut self, permission: super::mutation::PermissionKind) {
+        self.host.emit(Mutation::RequestPermission { permission });
+    }
+
     /// Presents the system media picker (PHPickerViewController on iOS).
     /// Results arrive as global [`Event::MediaPicked`] or [`Event::MediaPickerCancelled`].
     pub fn present_media_picker(&mut self, max_selection: usize) {
-        self.host.emit(Mutation::PresentMediaPicker { max_selection });
+        self.host
+            .emit(Mutation::PresentMediaPicker { max_selection });
     }
 
     /// Presents the system document picker (UIDocumentPickerViewController on
@@ -264,12 +278,16 @@ impl Tree {
     /// Registers a background task identifier with BGTaskScheduler.
     /// Must be called during app launch before the first background task fires.
     pub fn register_background_task(&mut self, identifier: String) {
-        self.host.emit(Mutation::RegisterBackgroundTask { identifier });
+        self.host
+            .emit(Mutation::RegisterBackgroundTask { identifier });
     }
 
     /// Schedules the next execution of a registered background task.
     pub fn schedule_background_task(&mut self, identifier: String, earliest_seconds: f64) {
-        self.host.emit(Mutation::ScheduleBackgroundTask { identifier, earliest_seconds });
+        self.host.emit(Mutation::ScheduleBackgroundTask {
+            identifier,
+            earliest_seconds,
+        });
     }
 
     /// Copies text to the system clipboard.
@@ -337,7 +355,12 @@ impl Tree {
     /// iOS: calls `[UIScrollView setContentOffset:animated:]`.
     pub fn scroll_to(&mut self, id: WidgetId, offset_x: f32, offset_y: f32, animated: bool) {
         if self.nodes.get(id.0).is_some() {
-            self.host.emit(Mutation::ScrollTo { id, offset_x, offset_y, animated });
+            self.host.emit(Mutation::ScrollTo {
+                id,
+                offset_x,
+                offset_y,
+                animated,
+            });
         }
     }
 

@@ -15,7 +15,10 @@ use base64::Engine as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::core::{Point, Rect};
-use crate::dom::{Event, GesturePhase, Lifecycle, PointerId, TextSelection, WidgetId};
+use crate::dom::{
+    Event, GesturePhase, Lifecycle, NetworkStatus, PermissionKind, PermissionStatus, PointerId,
+    TextSelection, WidgetId,
+};
 
 /// Current JSON wire protocol version for host-originated events.
 pub const WIRE_PROTOCOL_VERSION: u32 = 1;
@@ -170,6 +173,10 @@ pub enum WireEvent {
     Submit {
         target: u64,
     },
+    AccessibilityAction {
+        target: u64,
+        action: String,
+    },
     BackPressed,
     KeyboardWillShow {
         x: f32,
@@ -203,6 +210,13 @@ pub enum WireEvent {
     BiometricResult {
         success: bool,
         error: Option<String>,
+    },
+    PermissionChanged {
+        permission: PermissionKind,
+        status: PermissionStatus,
+    },
+    NetworkStatusChanged {
+        status: NetworkStatus,
     },
     LocationUpdated {
         latitude: f64,
@@ -331,6 +345,10 @@ impl WireEvent {
             WireEvent::Submit { target } => Event::Submit {
                 target: widget(target),
             },
+            WireEvent::AccessibilityAction { target, action } => Event::AccessibilityAction {
+                target: widget(target),
+                action,
+            },
             WireEvent::BackPressed => Event::BackPressed,
             WireEvent::KeyboardWillShow {
                 x,
@@ -372,6 +390,10 @@ impl WireEvent {
             WireEvent::BiometricResult { success, error } => {
                 Event::BiometricResult { success, error }
             }
+            WireEvent::PermissionChanged { permission, status } => {
+                Event::PermissionChanged { permission, status }
+            }
+            WireEvent::NetworkStatusChanged { status } => Event::NetworkStatusChanged { status },
             WireEvent::LocationUpdated {
                 latitude,
                 longitude,
@@ -501,6 +523,10 @@ impl From<Event> for WireEvent {
             Event::Submit { target } => WireEvent::Submit {
                 target: target.to_u64(),
             },
+            Event::AccessibilityAction { target, action } => WireEvent::AccessibilityAction {
+                target: target.to_u64(),
+                action,
+            },
             Event::BackPressed => WireEvent::BackPressed,
             Event::KeyboardWillShow { frame } => WireEvent::KeyboardWillShow {
                 x: frame.origin.x,
@@ -542,6 +568,10 @@ impl From<Event> for WireEvent {
             Event::BiometricResult { success, error } => {
                 WireEvent::BiometricResult { success, error }
             }
+            Event::PermissionChanged { permission, status } => {
+                WireEvent::PermissionChanged { permission, status }
+            }
+            Event::NetworkStatusChanged { status } => WireEvent::NetworkStatusChanged { status },
             Event::LocationUpdated {
                 latitude,
                 longitude,
@@ -738,6 +768,62 @@ mod tests {
                 target,
                 value: "hello".to_string(),
                 selection: TextSelection::caret(5),
+            }
+        );
+    }
+
+    #[test]
+    fn accessibility_action_event_json_round_trips_to_engine_event() {
+        let target = WidgetId::from_u64(0x0000_0012_0000_0003);
+        let event = WireEvent::AccessibilityAction {
+            target: target.to_u64(),
+            action: "Archive".to_string(),
+        };
+
+        let encoded = event.encode_json().expect("event encodes");
+        let decoded = WireEvent::decode_json(&encoded).expect("event decodes");
+
+        assert_eq!(
+            decoded.into_event(),
+            Event::AccessibilityAction {
+                target,
+                action: "Archive".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn permission_event_json_round_trips_to_engine_event() {
+        let event = WireEvent::PermissionChanged {
+            permission: PermissionKind::Camera,
+            status: PermissionStatus::Granted,
+        };
+
+        let encoded = event.encode_json().expect("event encodes");
+        let decoded = WireEvent::decode_json(&encoded).expect("event decodes");
+
+        assert_eq!(
+            decoded.into_event(),
+            Event::PermissionChanged {
+                permission: PermissionKind::Camera,
+                status: PermissionStatus::Granted,
+            }
+        );
+    }
+
+    #[test]
+    fn network_status_event_json_round_trips_to_engine_event() {
+        let event = WireEvent::NetworkStatusChanged {
+            status: NetworkStatus::Offline,
+        };
+
+        let encoded = event.encode_json().expect("event encodes");
+        let decoded = WireEvent::decode_json(&encoded).expect("event decodes");
+
+        assert_eq!(
+            decoded.into_event(),
+            Event::NetworkStatusChanged {
+                status: NetworkStatus::Offline,
             }
         );
     }

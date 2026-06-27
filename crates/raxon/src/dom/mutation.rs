@@ -102,6 +102,44 @@ pub struct LocalNotification {
     pub delay_seconds: u32,
 }
 
+/// A platform permission Raxon can check or request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionKind {
+    /// Foreground location access.
+    Location,
+    /// Camera capture / preview access.
+    Camera,
+    /// Microphone capture access.
+    Microphone,
+    /// Photo-library read access.
+    Photos,
+    /// User notification authorization.
+    Notifications,
+    /// Motion sensor access.
+    Motion,
+}
+
+/// Current platform authorization state for a [`PermissionKind`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionStatus {
+    /// The backend has not reported a value yet.
+    Unknown,
+    /// The permission is not supported on this platform.
+    Unsupported,
+    /// The OS can still prompt the user.
+    NotDetermined,
+    /// The OS or device policy restricts the permission.
+    Restricted,
+    /// The user denied the permission.
+    Denied,
+    /// The permission is granted.
+    Granted,
+    /// The permission is granted for a limited subset, such as selected photos.
+    Limited,
+}
+
 /// iOS `UIKeyboardType` — the style of keyboard shown for a text input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyboardType {
@@ -656,7 +694,9 @@ pub enum Attribute {
     /// Level 0 means no heading.
     AccessibilityHeadingLevel(u8),
     /// Named custom accessibility actions to expose on this element.
-    /// Each string becomes a `UIAccessibilityCustomAction` (stub on iOS for now).
+    /// Each string becomes a `UIAccessibilityCustomAction` on iOS and emits
+    /// [`Event::AccessibilityAction`](crate::dom::Event::AccessibilityAction)
+    /// when selected.
     AccessibilityActions(Vec<String>),
     /// When `true`, the view's font adjusts for the user's preferred content
     /// size category (Dynamic Type). Maps to
@@ -679,11 +719,11 @@ pub enum Attribute {
     /// Maps to `UIView.contentMode` on iOS.
     ImageResizeMode(ImageResizeMode),
     /// Fired when the image view successfully loads its image.
-    /// iOS: stub (TODO: wire up via image-load observer pattern).
+    /// iOS: fired for native asset/system-symbol and decoded raw-data loads.
     ImageOnLoad(ImageLoadCallback),
     /// Fired when the image view fails to load its image.
     /// The `String` argument carries a short error description.
-    /// iOS: stub (TODO: wire up via image-load observer pattern).
+    /// iOS: fired for missing native sources and undecodable raw image data.
     ImageOnError(ImageErrorCallback),
     /// The list of vector commands to render on a [`WidgetKind::Canvas`].
     /// Re-applying replaces the previous drawing.
@@ -1221,6 +1261,18 @@ pub enum Mutation {
         /// The localized reason string shown to the user.
         reason: String,
     },
+    /// Query the current authorization state for a platform permission.
+    /// The result is delivered as a global [`Event::PermissionChanged`].
+    CheckPermission {
+        /// The permission to inspect.
+        permission: PermissionKind,
+    },
+    /// Request a platform permission from the user.
+    /// The result is delivered as a global [`Event::PermissionChanged`].
+    RequestPermission {
+        /// The permission to request.
+        permission: PermissionKind,
+    },
     /// Start receiving location updates. Results arrive via `Event::LocationUpdated`.
     StartLocation,
     /// Stop location updates.
@@ -1301,7 +1353,7 @@ pub enum Mutation {
     },
     /// Register for Apple Push Notification Service (APNS) remote notifications.
     /// iOS: calls `[UIApplication registerForRemoteNotifications]`.
-    /// The device token arrives via `Event::PushTokenReceived`.
+    /// The device token is published to `runtime::use_push_token()`.
     RegisterForPushNotifications,
     /// Set the app badge count shown on the home screen icon.
     /// iOS: calls `[[UIApplication sharedApplication] setApplicationIconBadgeNumber: count]`.

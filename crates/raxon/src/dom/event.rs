@@ -11,7 +11,7 @@ use std::sync::mpsc::Sender;
 
 use crate::core::{Point, Rect};
 
-use super::mutation::WidgetId;
+use super::mutation::{PermissionKind, PermissionStatus, WidgetId};
 
 /// Identifies a single pointer/touch in a multi-touch sequence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -47,6 +47,22 @@ pub enum Lifecycle {
     Backgrounded,
     /// About to be terminated.
     Terminating,
+}
+
+/// Network reachability state reported by a platform host.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NetworkStatus {
+    /// Reachability has not been determined yet.
+    Unknown,
+    /// The device has an active internet connection (type unknown).
+    Online,
+    /// The device has no internet connection.
+    Offline,
+    /// Connected via Wi-Fi.
+    WiFi,
+    /// Connected via cellular/mobile data.
+    Cellular,
 }
 
 /// An input or lifecycle event entering the engine.
@@ -149,6 +165,13 @@ pub enum Event {
         /// The text field where submit was triggered.
         target: WidgetId,
     },
+    /// A named custom accessibility action was invoked on `target`.
+    AccessibilityAction {
+        /// The widget exposing the action.
+        target: WidgetId,
+        /// The action label selected by the assistive technology.
+        action: String,
+    },
     /// Android system back / iOS interactive-pop intent. App-global.
     BackPressed,
     /// The soft keyboard is about to appear, occupying `frame`. App-global.
@@ -201,6 +224,18 @@ pub enum Event {
         success: bool,
         /// An error message if authentication failed, or `None` on success.
         error: Option<String>,
+    },
+    /// A platform permission status was checked or changed.
+    PermissionChanged {
+        /// The permission that was checked or requested.
+        permission: PermissionKind,
+        /// The latest authorization status reported by the platform.
+        status: PermissionStatus,
+    },
+    /// Network reachability changed.
+    NetworkStatusChanged {
+        /// The latest network reachability state.
+        status: NetworkStatus,
     },
     /// GPS location update from CoreLocation.
     LocationUpdated {
@@ -288,6 +323,8 @@ pub enum EventKind {
     Refresh,
     /// [`Event::Submit`].
     Submit,
+    /// [`Event::AccessibilityAction`].
+    AccessibilityAction,
     /// [`Event::BackPressed`].
     BackPressed,
     /// [`Event::KeyboardWillShow`].
@@ -304,6 +341,10 @@ pub enum EventKind {
     DeepLink,
     /// [`Event::BiometricResult`].
     BiometricResult,
+    /// [`Event::PermissionChanged`].
+    PermissionChanged,
+    /// [`Event::NetworkStatusChanged`].
+    NetworkStatusChanged,
     /// [`Event::RotateChanged`].
     RotateChanged,
     /// [`Event::LocationUpdated`].
@@ -339,6 +380,7 @@ impl Event {
             Event::PanChanged { .. } => EventKind::Pan,
             Event::Refresh { .. } => EventKind::Refresh,
             Event::Submit { .. } => EventKind::Submit,
+            Event::AccessibilityAction { .. } => EventKind::AccessibilityAction,
             Event::BackPressed => EventKind::BackPressed,
             Event::KeyboardWillShow { .. } => EventKind::KeyboardWillShow,
             Event::KeyboardWillHide => EventKind::KeyboardWillHide,
@@ -347,6 +389,8 @@ impl Event {
             Event::PinchChanged { .. } => EventKind::Pinch,
             Event::DeepLink { .. } => EventKind::DeepLink,
             Event::BiometricResult { .. } => EventKind::BiometricResult,
+            Event::PermissionChanged { .. } => EventKind::PermissionChanged,
+            Event::NetworkStatusChanged { .. } => EventKind::NetworkStatusChanged,
             Event::RotateChanged { .. } => EventKind::RotateChanged,
             Event::LocationUpdated { .. } => EventKind::LocationUpdated,
             Event::LocationDenied => EventKind::LocationDenied,
@@ -374,7 +418,8 @@ impl Event {
             | Event::ValueChanged { target, .. }
             | Event::PanChanged { target, .. }
             | Event::Refresh { target }
-            | Event::Submit { target } => Some(target),
+            | Event::Submit { target }
+            | Event::AccessibilityAction { target, .. } => Some(target),
             Event::QrDetected { target, .. } => Some(target),
             Event::PinchChanged { target, .. } => Some(target),
             Event::BackPressed
@@ -383,6 +428,8 @@ impl Event {
             | Event::AppLifecycle(_)
             | Event::DeepLink { .. }
             | Event::BiometricResult { .. }
+            | Event::PermissionChanged { .. }
+            | Event::NetworkStatusChanged { .. }
             | Event::LocationUpdated { .. }
             | Event::LocationDenied
             | Event::MotionUpdated { .. }

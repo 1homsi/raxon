@@ -5,7 +5,7 @@
 
 use crate::core::{AlignItems, Color, Dimension, EdgeInsets, LayoutStyle, Point, Position};
 use crate::dom::{
-    Attribute, Callback, CursorStyle, EventKind, GesturePhase, GestureKind, LayoutDirection,
+    Attribute, Callback, CursorStyle, EventKind, GestureKind, GesturePhase, LayoutDirection,
     LinearGradient, MenuItem, Role, Shadow, SwipeDirection, Transform, Tree, WidgetId,
 };
 
@@ -447,10 +447,7 @@ pub trait ViewExt: View + Sized {
     /// Sets the pointer cursor style for this view. No-op on touch-only
     /// platforms; on iPad with pointer device or macOS Catalyst it changes
     /// the system cursor shape when hovering.
-    fn cursor(
-        self,
-        style: CursorStyle,
-    ) -> Decorated<Self, impl FnOnce(&mut Tree, WidgetId)> {
+    fn cursor(self, style: CursorStyle) -> Decorated<Self, impl FnOnce(&mut Tree, WidgetId)> {
         self.decorate(move |t, id| t.set(id, Attribute::Cursor(style)))
     }
 
@@ -590,17 +587,15 @@ pub trait ViewExt: View + Sized {
     ///
     /// Level 0 means no heading. On iOS this adds `UIAccessibilityTraitHeader`
     /// (bitmask `0x10000`) to the view's accessibility traits when level > 0.
-    fn accessibility_heading(
-        self,
-        level: u8,
-    ) -> Decorated<Self, impl FnOnce(&mut Tree, WidgetId)> {
+    fn accessibility_heading(self, level: u8) -> Decorated<Self, impl FnOnce(&mut Tree, WidgetId)> {
         self.decorate(move |t, id| t.set(id, Attribute::AccessibilityHeadingLevel(level)))
     }
 
     /// Exposes named custom accessibility actions on this element.
     ///
     /// Each string in `actions` maps to a `UIAccessibilityCustomAction` on
-    /// iOS (stub — invoke the action name as a label; handler is a TODO).
+    /// iOS. Pair with [`on_accessibility_action`](ViewExt::on_accessibility_action)
+    /// to handle selections.
     fn accessibility_actions(
         self,
         actions: Vec<&str>,
@@ -609,15 +604,27 @@ pub trait ViewExt: View + Sized {
         self.decorate(move |t, id| t.set(id, Attribute::AccessibilityActions(owned)))
     }
 
+    /// Runs `f` when assistive technology invokes a named custom accessibility
+    /// action on this view.
+    fn on_accessibility_action(
+        self,
+        mut f: impl FnMut(String) + 'static,
+    ) -> Decorated<Self, impl FnOnce(&mut Tree, WidgetId)> {
+        self.decorate(move |t, id| {
+            t.on(id, EventKind::AccessibilityAction, move |event| {
+                if let crate::dom::Event::AccessibilityAction { action, .. } = event {
+                    f(action.clone());
+                }
+            });
+        })
+    }
+
     /// Enables Dynamic Type font scaling for this view.
     ///
     /// When `dt` is `true`, the view's font automatically adjusts for the
     /// user's preferred content size category. Maps to
     /// `adjustsFontForContentSizeCategory = true` on iOS.
-    fn dynamic_type(
-        self,
-        dt: bool,
-    ) -> Decorated<Self, impl FnOnce(&mut Tree, WidgetId)> {
+    fn dynamic_type(self, dt: bool) -> Decorated<Self, impl FnOnce(&mut Tree, WidgetId)> {
         self.decorate(move |t, id| t.set(id, Attribute::DynamicType(dt)))
     }
 
@@ -679,17 +686,24 @@ pub trait ViewExt: View + Sized {
         bottom: f32,
         left: f32,
     ) -> Decorated<Self, impl FnOnce(&mut Tree, WidgetId)> {
-        self.decorate(move |t, id| t.set(id, Attribute::HitSlop { top, right, bottom, left }))
+        self.decorate(move |t, id| {
+            t.set(
+                id,
+                Attribute::HitSlop {
+                    top,
+                    right,
+                    bottom,
+                    left,
+                },
+            )
+        })
     }
 
     /// Sets the layout direction for this view and all of its descendants.
     ///
     /// Use [`LayoutDirection::Rtl`] for right-to-left locales (Arabic, Hebrew,
     /// Persian, …) to flip text direction and child ordering automatically.
-    fn direction(
-        self,
-        dir: LayoutDirection,
-    ) -> Decorated<Self, impl FnOnce(&mut Tree, WidgetId)> {
+    fn direction(self, dir: LayoutDirection) -> Decorated<Self, impl FnOnce(&mut Tree, WidgetId)> {
         self.decorate(move |t, id| t.set(id, Attribute::Direction(dir)))
     }
 

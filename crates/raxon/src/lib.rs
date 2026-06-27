@@ -26,54 +26,54 @@
 
 // --- subsystems, namespaced ------------------------------------------------
 
-/// Core value types: colors, geometry, and the neutral layout style model.
-pub mod core;
-/// Fine-grained reactivity: signals, memos, effects, context, scopes.
-pub mod reactive;
-/// The virtual DOM: element tree, mutations, events, and backend trait.
-pub mod dom;
-/// The declarative, macro-free view builder.
-pub mod view;
-/// The app runtime that drives layout, events, and frames.
-pub mod runtime;
-/// Navigation: stack/tab navigators and typed routes.
-pub mod nav;
-/// Key-value storage and persisted signals.
-pub mod store;
-/// HTTP client and request/response types.
-pub mod net;
+/// Android backend command queue and driver foundation.
+pub mod android;
 /// Animation: tweens and easing.
 pub mod anim;
 /// Cooperative async: the executor and `Resource`.
 pub mod async_rt;
-/// Internationalization: message catalogs and lookup.
-pub mod intl;
-/// Theming: palettes, spacing, typography, and the `Theme` context.
-pub mod style;
-/// Plugin system for registering native modules with the raxon runtime.
-pub mod plugin;
-/// Secure key-value storage (iOS Keychain on device, in-memory elsewhere).
-pub mod keychain;
-/// Structured logging.
-pub mod log;
-/// i18n message format helpers.
-pub mod i18n;
-/// Frame scheduler and clock.
-pub mod scheduler;
-/// Filesystem utilities.
-pub mod fs;
+/// Core value types: colors, geometry, and the neutral layout style model.
+pub mod core;
+/// The virtual DOM: element tree, mutations, events, and backend trait.
+pub mod dom;
 /// Form validation helpers.
 pub mod form;
-/// SQLite database access.
-pub mod sqlite;
-/// Layout engine integration.
-pub mod layout;
-/// Android backend command queue and driver foundation.
-pub mod android;
-/// WebAssembly DOM backend command queue and driver foundation.
-pub mod web;
+/// Filesystem utilities.
+pub mod fs;
 /// Shared host-session lifecycle for generated platform glue.
 pub mod host;
+/// i18n message format helpers.
+pub mod i18n;
+/// Internationalization: message catalogs and lookup.
+pub mod intl;
+/// Secure key-value storage (iOS Keychain on device, in-memory elsewhere).
+pub mod keychain;
+/// Layout engine integration.
+pub mod layout;
+/// Structured logging.
+pub mod log;
+/// Navigation: stack/tab navigators and typed routes.
+pub mod nav;
+/// HTTP client and request/response types.
+pub mod net;
+/// Plugin system for registering native modules with the raxon runtime.
+pub mod plugin;
+/// Fine-grained reactivity: signals, memos, effects, context, scopes.
+pub mod reactive;
+/// The app runtime that drives layout, events, and frames.
+pub mod runtime;
+/// Frame scheduler and clock.
+pub mod scheduler;
+/// SQLite database access.
+pub mod sqlite;
+/// Key-value storage and persisted signals.
+pub mod store;
+/// Theming: palettes, spacing, typography, and the `Theme` context.
+pub mod style;
+/// The declarative, macro-free view builder.
+pub mod view;
+/// WebAssembly DOM backend command queue and driver foundation.
+pub mod web;
 /// Versioned JSON wire protocol for host-originated platform events.
 pub mod wire;
 
@@ -97,17 +97,18 @@ pub use ios::run;
 /// Bundles the view builders + modifiers, the reactive primitives, the core
 /// value types, and the most-used helpers from each subsystem.
 pub mod prelude {
-    pub use crate::view::*;
-    pub use crate::reactive::*;
     pub use crate::core::{Color, ColorScheme, FlexDirection, LayoutStyle, Point, Rect, Size};
+    pub use crate::reactive::*;
+    pub use crate::view::*;
 
     pub use crate::runtime::{
-        authenticate_biometric, cancel_notification, clear_ui_state, haptic,
+        authenticate_biometric, cancel_notification, check_permission, clear_ui_state, haptic,
         install_error_overlay, last_panic, on_deep_link, present_document_picker,
-        register_background_task, restore_ui_state, save_ui_state, schedule_background_task,
-        schedule_notification, set_backdrop, start_location, start_motion, stop_location,
-        stop_motion, use_color_scheme, use_safe_area_insets, App, Backdrop, HapticStyle,
-        KeyboardType, LocalNotification, TextStyle,
+        register_background_task, request_permission, restore_ui_state, save_ui_state,
+        schedule_background_task, schedule_notification, set_backdrop, start_location,
+        start_motion, stop_location, stop_motion, use_color_scheme, use_permission,
+        use_app_lifecycle, use_safe_area_insets, App, Backdrop, HapticStyle, KeyboardType,
+        Lifecycle, LocalNotification, NetworkStatus, PermissionKind, PermissionStatus, TextStyle,
     };
 
     pub use crate::anim::{
@@ -115,20 +116,23 @@ pub mod prelude {
         start_animation_thread, Easing, OffThreadValue, Spring,
     };
     pub use crate::async_rt::{create_resource, Resource, ResourceState};
+    pub use crate::intl::{t, t_args, t_plural};
+    pub use crate::keychain::{delete_secret, get_secret, set_secret};
+    pub use crate::nav::{
+        bind_web_history, can_go_back, create_navigator, current_route, current_route_location,
+        go_back, match_route, match_route_location, navigate, parse_deep_link, parse_query,
+        parse_query_all, parse_route_location, route, routes, stack, transition_routes, url_routes,
+        use_navigator, use_params, use_query_params, NavigationTransition, Navigator,
+        RouteLocation, RouteMatch, UrlRoute,
+    };
     pub use crate::net::{
         connect_sse, connect_ws, gc_query_cache, get, invalidate_query, post, send, use_query,
         use_query_stale, Method, Request, Response, SseEvent, WsHandle, WsMessage,
     };
-    pub use crate::intl::{t, t_args, t_plural};
-    pub use crate::nav::{
-        create_navigator, routes, stack, transition_routes, use_navigator, NavigationTransition,
-        Navigator,
-    };
+    pub use crate::platform::{platform_choice, platform_value};
+    pub use crate::plugin::{dispatch_plugin_event, register_plugin, Plugin};
     pub use crate::store::{persisted, store_get, store_set};
     pub use crate::style::{theme, use_theme, Theme};
-    pub use crate::plugin::{dispatch_plugin_event, register_plugin, Plugin};
-    pub use crate::keychain::{delete_secret, get_secret, set_secret};
-    pub use crate::platform::{platform_choice, platform_value};
 
     #[cfg(target_os = "ios")]
     pub use crate::ios::run;

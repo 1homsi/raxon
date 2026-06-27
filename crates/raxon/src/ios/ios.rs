@@ -10,34 +10,39 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
+use std::ffi::{c_char, c_void};
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol};
+use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol, ProtocolObject};
 use objc2::{class, define_class, msg_send, sel, ClassType, MainThreadMarker, MainThreadOnly};
 use objc2_core_foundation::{CGAffineTransform, CGPoint, CGRect, CGSize};
 use objc2_foundation::{
-    NSDate, NSData, NSMutableArray, NSNotification, NSNotificationCenter, NSRange, NSString,
+    NSData, NSDate, NSMutableArray, NSNotification, NSNotificationCenter, NSRange, NSString,
 };
 use objc2_quartz_core::{CADisplayLink, CAGradientLayer, CALayer, CAShapeLayer, CATextLayer};
 use objc2_ui_kit::{
-    NSTextAlignment, UIActivityIndicatorView, UIApplication, UIApplicationDelegate, UIButton,
-    UIButtonType, UIColor, UIControl, UIControlEvents, UIControlState, UIFont, UIGestureRecognizer,
-    UIGestureRecognizerState, UIImage, UIImageView, UILabel, UILongPressGestureRecognizer,
-    UIDatePicker, UIDatePickerMode, UIDatePickerStyle, UIPanGestureRecognizer,
-    UIPinchGestureRecognizer, UIProgressView, UIRotationGestureRecognizer, UIScreen, UIScrollView,
+    NSTextAlignment, UIAccessibilityCustomAction, UIActivityIndicatorView, UIApplication,
+    UIApplicationDelegate, UIBlurEffect, UIBlurEffectStyle, UIButton, UIButtonType, UIColor,
+    UIControl, UIControlEvents, UIControlState, UIDatePicker, UIDatePickerMode, UIDatePickerStyle,
+    UIEdgeInsets, UIFont, UIGestureRecognizer, UIGestureRecognizerState, UIImage, UIImageView,
+    UILabel, UILongPressGestureRecognizer, UIPanGestureRecognizer, UIPinchGestureRecognizer,
+    UIProgressView, UIRotationGestureRecognizer, UIScreen, UIScrollView, UIScrollViewDelegate,
     UISegmentedControl, UISlider, UIStepper, UISwitch, UITapGestureRecognizer, UITextBorderStyle,
-    UITextField, UITextInputTraits, UITextView, UITraitEnvironment, UIUserInterfaceStyle, UIView,
-    UIViewController, UIWindow,
+    UITextField, UITextFieldViewMode, UITextInputTraits, UITextView, UITraitEnvironment,
+    UIUserInterfaceStyle, UIView, UIViewController, UIVisualEffectView, UIWindow,
 };
 
 use block2::RcBlock;
 
 use crate::core::{Color, ColorScheme, EdgeInsets, Point, Rect, Size};
 use crate::dom::{
-    Attribute, Backend, DrawCmd, Event, EventSink, GestureKind, GesturePhase, HapticStyle, Host,
-    KeyboardType, LayoutDirection, MenuItem, Mutation, TextDecoration, TextSelection, WidgetId,
-    WidgetKind,
+    Attribute, Backend, Callback, DrawCmd, Event, EventSink, GestureKind, GesturePhase,
+    HapticStyle, Host, ImageErrorCallback, ImageLoadCallback, KeyboardType, LayoutDirection,
+    Lifecycle, MenuItem, Mutation, NetworkStatus, PermissionKind, PermissionStatus, ScrollCallback,
+    ScrollInfo, SwipeDirection, TextDecoration, TextSelection, WidgetId, WidgetKind,
 };
 // TextStyle is referenced as crate::dom::TextStyle in the match arms.
 use crate::runtime::App;
@@ -48,6 +53,32 @@ use crate::view::View;
 // ---------------------------------------------------------------------------
 
 type ViewFactory = Box<dyn FnOnce(Host, Size) -> App>;
+
+static PENDING_PERMISSION_RESULTS: Mutex<Vec<(PermissionKind, PermissionStatus)>> =
+    Mutex::new(Vec::new());
+static PENDING_MEDIA_RESULTS: Mutex<Vec<Vec<Arc<Vec<u8>>>>> = Mutex::new(Vec::new());
+static PENDING_MEDIA_CANCELS: Mutex<usize> = Mutex::new(0);
+
+const SC_NETWORK_REACHABILITY_FLAGS_REACHABLE: u32 = 1 << 1;
+const SC_NETWORK_REACHABILITY_FLAGS_CONNECTION_REQUIRED: u32 = 1 << 2;
+const SC_NETWORK_REACHABILITY_FLAGS_CONNECTION_ON_TRAFFIC: u32 = 1 << 3;
+const SC_NETWORK_REACHABILITY_FLAGS_INTERVENTION_REQUIRED: u32 = 1 << 4;
+const SC_NETWORK_REACHABILITY_FLAGS_CONNECTION_ON_DEMAND: u32 = 1 << 5;
+const SC_NETWORK_REACHABILITY_FLAGS_IS_WWAN: u32 = 1 << 18;
+
+#[link(name = "SystemConfiguration", kind = "framework")]
+extern "C" {
+    fn SCNetworkReachabilityCreateWithName(
+        allocator: *const c_void,
+        nodename: *const c_char,
+    ) -> *const c_void;
+    fn SCNetworkReachabilityGetFlags(target: *const c_void, flags: *mut u32) -> u8;
+}
+
+#[link(name = "CoreFoundation", kind = "framework")]
+extern "C" {
+    fn CFRelease(cf: *const c_void);
+}
 
 struct IosState {
     app: Rc<RefCell<App>>,
@@ -72,6 +103,8 @@ thread_local! {
     static PENDING_QR: RefCell<Vec<(u64, String)>> = const { RefCell::new(Vec::new()) };
     // Deep link URLs queued by application:openURL:options:. Drained in handle_tick.
     static PENDING_DEEP_LINKS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    // App lifecycle transitions queued by UIApplicationDelegate callbacks.
+    static PENDING_APP_LIFECYCLE: RefCell<Vec<Lifecycle>> = const { RefCell::new(Vec::new()) };
     // Biometric authentication results queued from the reply block (arbitrary thread).
     // Drained in handle_tick and dispatched as Event::BiometricResult.
     static PENDING_BIOMETRIC: RefCell<Vec<(bool, Option<String>)>> = const { RefCell::new(Vec::new()) };
@@ -81,6 +114,12 @@ thread_local! {
     static PENDING_LOCATION_DENIED: Cell<bool> = const { Cell::new(false) };
     // The CLLocationManager instance (raw pointer, retained manually).
     static LOCATION_MANAGER: RefCell<Option<*mut AnyObject>> = const { RefCell::new(None) };
+    // CLLocationManager.delegate is weak, so keep the delegate alive while
+    // location updates are running.
+    static LOCATION_DELEGATE: RefCell<Option<Retained<LocationDelegate>>> = const { RefCell::new(None) };
+    // One-shot manager used for permission prompts that should not start GPS.
+    static PERMISSION_LOCATION_MANAGER: RefCell<Option<*mut AnyObject>> = const { RefCell::new(None) };
+    static PERMISSION_LOCATION_DELEGATE: RefCell<Option<Retained<LocationDelegate>>> = const { RefCell::new(None) };
     // Motion data polled each tick from CMMotionManager. Each tuple:
     // (accel_x, accel_y, accel_z, gyro_x, gyro_y, gyro_z)
     static PENDING_MOTION: RefCell<Vec<(Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>)>> =
@@ -106,6 +145,28 @@ thread_local! {
         RefCell::new(std::collections::VecDeque::new());
     // Tick counter used to throttle UIDevice battery polling (once per ~60 ticks).
     static BATTERY_TICK: Cell<u64> = const { Cell::new(0) };
+    // Tick counter + last value used to throttle native reachability polling.
+    static NETWORK_TICK: Cell<u64> = const { Cell::new(0) };
+    static LAST_NETWORK_STATUS: Cell<Option<NetworkStatus>> = const { Cell::new(None) };
+    // UIScrollView callbacks keyed by WidgetId::to_u64(). The Objective-C
+    // delegate remains ivar-free and looks handlers up by the view's tag.
+    static SCROLL_HANDLERS: RefCell<HashMap<u64, ScrollHandlers>> = RefCell::new(HashMap::new());
+    // Text input constraints keyed by WidgetId::to_u64(), read by the shared
+    // UITextField/UITextView delegate before UIKit applies an edit.
+    static TEXT_MAX_LENGTHS: RefCell<HashMap<u64, usize>> = RefCell::new(HashMap::new());
+    // Press/swipe callbacks keyed by WidgetId::to_u64(). Recognizers recover
+    // the widget from the view tag and dispatch these Rust callbacks.
+    static PRESS_HANDLERS: RefCell<HashMap<u64, PressHandlers>> = RefCell::new(HashMap::new());
+    static SWIPE_HANDLERS: RefCell<HashMap<(u64, u8), Callback>> = RefCell::new(HashMap::new());
+    // Image lifecycle callbacks keyed by WidgetId::to_u64(). The latest
+    // native load result is kept so callbacks installed after the source/data
+    // mutation still observe the current image.
+    static IMAGE_HANDLERS: RefCell<HashMap<u64, ImageHandlers>> = RefCell::new(HashMap::new());
+    // UIAccessibilityCustomAction object pointers mapped to their owning
+    // widget/action payload. The backend retains the action objects while this
+    // map lets the selector stay ivar-free.
+    static ACCESSIBILITY_ACTION_PAYLOADS: RefCell<HashMap<usize, (u64, String)>> =
+        RefCell::new(HashMap::new());
 }
 
 /// Send a selector that takes a single `NSInteger` argument via raw
@@ -138,6 +199,69 @@ fn handle_tap(tag_bits: u64) {
     });
 }
 
+fn poll_ios_network_status_if_due() -> Option<NetworkStatus> {
+    NETWORK_TICK.with(|tick| {
+        let current = tick.get();
+        tick.set(current.wrapping_add(1));
+        if current % 60 != 0 {
+            return None;
+        }
+
+        let status = query_ios_network_status();
+        LAST_NETWORK_STATUS.with(|last| {
+            if last.get() == Some(status) {
+                None
+            } else {
+                last.set(Some(status));
+                Some(status)
+            }
+        })
+    })
+}
+
+fn query_ios_network_status() -> NetworkStatus {
+    unsafe {
+        let target = SCNetworkReachabilityCreateWithName(
+            std::ptr::null(),
+            b"apple.com\0".as_ptr().cast::<c_char>(),
+        );
+        if target.is_null() {
+            return NetworkStatus::Unknown;
+        }
+
+        let mut flags = 0_u32;
+        let ok = SCNetworkReachabilityGetFlags(target, &mut flags) != 0;
+        CFRelease(target);
+        if !ok {
+            return NetworkStatus::Unknown;
+        }
+
+        ios_network_status_from_flags(flags)
+    }
+}
+
+fn ios_network_status_from_flags(flags: u32) -> NetworkStatus {
+    let reachable = flags & SC_NETWORK_REACHABILITY_FLAGS_REACHABLE != 0;
+    let connection_required = flags & SC_NETWORK_REACHABILITY_FLAGS_CONNECTION_REQUIRED != 0;
+    let can_connect_automatically = flags
+        & (SC_NETWORK_REACHABILITY_FLAGS_CONNECTION_ON_DEMAND
+            | SC_NETWORK_REACHABILITY_FLAGS_CONNECTION_ON_TRAFFIC)
+        != 0;
+    let intervention_required = flags & SC_NETWORK_REACHABILITY_FLAGS_INTERVENTION_REQUIRED != 0;
+
+    let online = reachable
+        && (!connection_required || (can_connect_automatically && !intervention_required));
+    if !online {
+        return NetworkStatus::Offline;
+    }
+
+    if flags & SC_NETWORK_REACHABILITY_FLAGS_IS_WWAN != 0 {
+        NetworkStatus::Cellular
+    } else {
+        NetworkStatus::WiFi
+    }
+}
+
 fn handle_tick() {
     // Drain any QR detections collected since the last tick. We pull them out
     // *before* borrowing the app so we never hold two borrows simultaneously.
@@ -148,6 +272,12 @@ fn handle_tick() {
 
     // Drain any deep link URLs queued by application:openURL:options:.
     let deep_links: Vec<String> = PENDING_DEEP_LINKS.with(|q| {
+        let mut v = q.borrow_mut();
+        std::mem::take(&mut *v)
+    });
+
+    // Drain app lifecycle transitions queued by UIApplicationDelegate callbacks.
+    let lifecycle_events: Vec<Lifecycle> = PENDING_APP_LIFECYCLE.with(|q| {
         let mut v = q.borrow_mut();
         std::mem::take(&mut *v)
     });
@@ -165,6 +295,11 @@ fn handle_tick() {
     });
     let location_denied = PENDING_LOCATION_DENIED.with(|c| c.replace(false));
 
+    let permission_results: Vec<(PermissionKind, PermissionStatus)> = PENDING_PERMISSION_RESULTS
+        .lock()
+        .map(|mut v| std::mem::take(&mut *v))
+        .unwrap_or_default();
+
     // Poll CMMotionManager for current accelerometer and gyroscope readings.
     // CMAcceleration / CMRotationRate are both {f64, f64, f64} structs that
     // objc2's msg_send! needs to receive by value. We implement Encode for our
@@ -176,12 +311,10 @@ fn handle_tick() {
         z: f64,
     }
     unsafe impl objc2::Encode for Motion3 {
-        const ENCODING: objc2::encode::Encoding =
-            objc2::encode::Encoding::Struct("CMAcceleration", &[
-                f64::ENCODING,
-                f64::ENCODING,
-                f64::ENCODING,
-            ]);
+        const ENCODING: objc2::encode::Encoding = objc2::encode::Encoding::Struct(
+            "CMAcceleration",
+            &[f64::ENCODING, f64::ENCODING, f64::ENCODING],
+        );
     }
 
     MOTION_MANAGER.with(|m| {
@@ -207,31 +340,52 @@ fn handle_tick() {
 
             if accel.0.is_some() || gyro.0.is_some() {
                 PENDING_MOTION.with(|q| {
-                    q.borrow_mut().push((accel.0, accel.1, accel.2, gyro.0, gyro.1, gyro.2));
+                    q.borrow_mut()
+                        .push((accel.0, accel.1, accel.2, gyro.0, gyro.1, gyro.2));
                 });
             }
         }
     });
 
     // Drain motion events queued above.
-    let motion_events: Vec<(Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>)> =
-        PENDING_MOTION.with(|q| {
-            let mut v = q.borrow_mut();
-            std::mem::take(&mut *v)
-        });
-
-    // Drain media picker results and cancellation flag.
-    let media_results: Vec<Vec<std::sync::Arc<Vec<u8>>>> = PENDING_MEDIA.with(|q| {
+    let motion_events: Vec<(
+        Option<f64>,
+        Option<f64>,
+        Option<f64>,
+        Option<f64>,
+        Option<f64>,
+        Option<f64>,
+    )> = PENDING_MOTION.with(|q| {
         let mut v = q.borrow_mut();
         std::mem::take(&mut *v)
     });
-    let media_cancelled = PENDING_MEDIA_CANCEL.with(|c| c.replace(false));
+
+    // Drain media picker results and cancellation flag.
+    let mut media_results: Vec<Vec<Arc<Vec<u8>>>> = PENDING_MEDIA.with(|q| {
+        let mut v = q.borrow_mut();
+        std::mem::take(&mut *v)
+    });
+    let async_media_results: Vec<Vec<Arc<Vec<u8>>>> = PENDING_MEDIA_RESULTS
+        .lock()
+        .map(|mut v| std::mem::take(&mut *v))
+        .unwrap_or_default();
+    media_results.extend(async_media_results);
+    let media_cancelled = PENDING_MEDIA_CANCEL.with(|c| c.replace(false))
+        || PENDING_MEDIA_CANCELS
+            .lock()
+            .map(|mut count| {
+                let cancelled = *count > 0;
+                *count = 0;
+                cancelled
+            })
+            .unwrap_or(false);
 
     // Drain document picker results.
     let document_results: Vec<Vec<(String, Vec<u8>)>> = PENDING_DOCUMENTS.with(|q| {
         let mut v = q.borrow_mut();
         std::mem::take(&mut *v)
     });
+    let network_status = poll_ios_network_status_if_due();
 
     STATE.with(|s| {
         if let Some(state) = s.borrow().as_ref() {
@@ -277,16 +431,38 @@ fn handle_tick() {
             for url in deep_links {
                 state.event_sink.dispatch(Event::DeepLink { url });
             }
+            // Dispatch queued app lifecycle transitions.
+            for lifecycle in lifecycle_events {
+                state.event_sink.dispatch(Event::AppLifecycle(lifecycle));
+            }
             // Dispatch queued biometric results into the event system.
             for (success, error) in biometric_results {
-                state.event_sink.dispatch(Event::BiometricResult { success, error });
+                state
+                    .event_sink
+                    .dispatch(Event::BiometricResult { success, error });
+            }
+            // Dispatch queued permission status results.
+            for (permission, status) in permission_results {
+                crate::runtime::update_permission(permission, status);
+                state
+                    .event_sink
+                    .dispatch(Event::PermissionChanged { permission, status });
             }
             // Dispatch queued GPS location fixes.
             for (latitude, longitude, accuracy) in location_fixes {
-                state.event_sink.dispatch(Event::LocationUpdated { latitude, longitude, accuracy });
+                state.event_sink.dispatch(Event::LocationUpdated {
+                    latitude,
+                    longitude,
+                    accuracy,
+                });
             }
             if location_denied {
                 state.event_sink.dispatch(Event::LocationDenied);
+            }
+            if let Some(status) = network_status {
+                state
+                    .event_sink
+                    .dispatch(Event::NetworkStatusChanged { status });
             }
             // Dispatch queued motion sensor readings.
             for (accel_x, accel_y, accel_z, gyro_x, gyro_y, gyro_z) in motion_events {
@@ -320,8 +496,7 @@ fn handle_tick() {
                 c.set(tick.wrapping_add(1));
                 if tick % 60 == 0 {
                     unsafe {
-                        let device: *mut AnyObject =
-                            msg_send![class!(UIDevice), currentDevice];
+                        let device: *mut AnyObject = msg_send![class!(UIDevice), currentDevice];
                         let _: () = msg_send![device, setBatteryMonitoringEnabled: true];
                         // batteryLevel returns -1.0 when monitoring is not enabled
                         // or the level is unknown; clamp to 0.0 in that case.
@@ -341,7 +516,11 @@ fn handle_tick() {
                 let mut deq = ts.borrow_mut();
                 deq.push_back(now);
                 // Evict timestamps older than 1 second.
-                while deq.front().map(|t| now.duration_since(*t) > std::time::Duration::from_secs(1)).unwrap_or(false) {
+                while deq
+                    .front()
+                    .map(|t| now.duration_since(*t) > std::time::Duration::from_secs(1))
+                    .unwrap_or(false)
+                {
                     deq.pop_front();
                 }
                 deq.len() as f32
@@ -357,6 +536,10 @@ fn handle_keyboard(height: f32) {
     // field resigns first responder, which posts the hide notification), so it
     // must never borrow the app itself.
     PENDING_KEYBOARD.with(|k| k.set(Some(height)));
+}
+
+fn queue_app_lifecycle(lifecycle: Lifecycle) {
+    PENDING_APP_LIFECYCLE.with(|q| q.borrow_mut().push(lifecycle));
 }
 
 fn handle_value_changed(tag_bits: u64, value: f64) {
@@ -396,6 +579,343 @@ fn handle_text_changed(tag_bits: u64, value: String) {
             });
         }
     });
+}
+
+fn set_text_max_length(tag: u64, max_len: usize) {
+    TEXT_MAX_LENGTHS.with(|limits| {
+        limits.borrow_mut().insert(tag, max_len);
+    });
+}
+
+fn clear_text_input_state(tag: u64) {
+    TEXT_MAX_LENGTHS.with(|limits| {
+        limits.borrow_mut().remove(&tag);
+    });
+}
+
+#[derive(Clone)]
+enum ImageLoadResult {
+    Loaded,
+    Error(String),
+}
+
+#[derive(Default)]
+struct ImageHandlers {
+    on_load: Option<ImageLoadCallback>,
+    on_error: Option<ImageErrorCallback>,
+    last_result: Option<ImageLoadResult>,
+}
+
+fn set_image_on_load(tag: u64, callback: ImageLoadCallback) {
+    let fire_now = IMAGE_HANDLERS.with(|handlers| {
+        let mut handlers = handlers.borrow_mut();
+        let state = handlers.entry(tag).or_default();
+        let fire_now = matches!(state.last_result, Some(ImageLoadResult::Loaded));
+        state.on_load = Some(callback.clone());
+        fire_now
+    });
+
+    if fire_now {
+        callback.call();
+    }
+}
+
+fn set_image_on_error(tag: u64, callback: ImageErrorCallback) {
+    let last_error = IMAGE_HANDLERS.with(|handlers| {
+        let mut handlers = handlers.borrow_mut();
+        let state = handlers.entry(tag).or_default();
+        let last_error = match &state.last_result {
+            Some(ImageLoadResult::Error(error)) => Some(error.clone()),
+            _ => None,
+        };
+        state.on_error = Some(callback.clone());
+        last_error
+    });
+
+    if let Some(error) = last_error {
+        callback.call(error);
+    }
+}
+
+fn mark_image_loaded(tag: u64) {
+    let callback = IMAGE_HANDLERS.with(|handlers| {
+        let mut handlers = handlers.borrow_mut();
+        let state = handlers.entry(tag).or_default();
+        state.last_result = Some(ImageLoadResult::Loaded);
+        state.on_load.clone()
+    });
+
+    if let Some(callback) = callback {
+        callback.call();
+    }
+}
+
+fn mark_image_error(tag: u64, error: impl Into<String>) {
+    let error = error.into();
+    let callback = IMAGE_HANDLERS.with(|handlers| {
+        let mut handlers = handlers.borrow_mut();
+        let state = handlers.entry(tag).or_default();
+        state.last_result = Some(ImageLoadResult::Error(error.clone()));
+        state.on_error.clone()
+    });
+
+    if let Some(callback) = callback {
+        callback.call(error);
+    }
+}
+
+fn clear_image_handlers(tag: u64) {
+    IMAGE_HANDLERS.with(|handlers| {
+        handlers.borrow_mut().remove(&tag);
+    });
+}
+
+fn action_key(action: &UIAccessibilityCustomAction) -> usize {
+    action as *const UIAccessibilityCustomAction as usize
+}
+
+fn register_accessibility_action_payload(
+    action: &UIAccessibilityCustomAction,
+    tag: u64,
+    name: String,
+) {
+    ACCESSIBILITY_ACTION_PAYLOADS.with(|payloads| {
+        payloads
+            .borrow_mut()
+            .insert(action_key(action), (tag, name));
+    });
+}
+
+fn clear_accessibility_action_payloads(tag: u64) {
+    ACCESSIBILITY_ACTION_PAYLOADS.with(|payloads| {
+        payloads
+            .borrow_mut()
+            .retain(|_, (payload_tag, _)| *payload_tag != tag);
+    });
+}
+
+fn handle_accessibility_custom_action(action: &UIAccessibilityCustomAction) -> bool {
+    let payload = ACCESSIBILITY_ACTION_PAYLOADS
+        .with(|payloads| payloads.borrow().get(&action_key(action)).cloned());
+    let Some((tag, action)) = payload else {
+        return false;
+    };
+
+    STATE.with(|s| {
+        if let Some(state) = s.borrow().as_ref() {
+            state.event_sink.dispatch(Event::AccessibilityAction {
+                target: WidgetId::from_u64(tag),
+                action,
+            });
+        }
+    });
+    true
+}
+
+fn should_allow_text_edit(
+    tag: u64,
+    current: Option<&NSString>,
+    range: NSRange,
+    replacement: &NSString,
+) -> bool {
+    let Some(max_len) = TEXT_MAX_LENGTHS.with(|limits| limits.borrow().get(&tag).copied()) else {
+        return true;
+    };
+
+    let current_len = current.map(|text| text.length()).unwrap_or_default();
+    let removed_len = if range.location <= current_len {
+        range.length.min(current_len - range.location)
+    } else {
+        0
+    };
+    let next_len = current_len
+        .saturating_sub(removed_len)
+        .saturating_add(replacement.length());
+
+    next_len <= max_len
+}
+
+#[derive(Default)]
+struct PressHandlers {
+    on_press_in: Option<Callback>,
+    on_press_out: Option<Callback>,
+    pressed: bool,
+}
+
+fn update_press_handlers(tag: u64, update: impl FnOnce(&mut PressHandlers)) {
+    PRESS_HANDLERS.with(|handlers| {
+        let mut handlers = handlers.borrow_mut();
+        update(handlers.entry(tag).or_default());
+    });
+}
+
+fn set_swipe_handler(tag: u64, direction: SwipeDirection, callback: Callback) {
+    SWIPE_HANDLERS.with(|handlers| {
+        handlers
+            .borrow_mut()
+            .insert((tag, swipe_direction_bits(direction)), callback);
+    });
+}
+
+fn clear_interaction_handlers(tag: u64) {
+    PRESS_HANDLERS.with(|handlers| {
+        handlers.borrow_mut().remove(&tag);
+    });
+    SWIPE_HANDLERS.with(|handlers| {
+        handlers
+            .borrow_mut()
+            .retain(|(handler_tag, _), _| *handler_tag != tag);
+    });
+}
+
+fn swipe_direction_bits(direction: SwipeDirection) -> u8 {
+    match direction {
+        SwipeDirection::Right => 1,
+        SwipeDirection::Left => 2,
+        SwipeDirection::Up => 4,
+        SwipeDirection::Down => 8,
+    }
+}
+
+fn handle_press_recognized(recognizer: &UILongPressGestureRecognizer) {
+    let Some(tag) = recognizer_tag(recognizer) else {
+        return;
+    };
+    let state = unsafe { recognizer.state() };
+    let callback = PRESS_HANDLERS.with(|handlers| {
+        let mut handlers = handlers.borrow_mut();
+        let handlers = handlers.get_mut(&tag)?;
+        if state == UIGestureRecognizerState::Began {
+            handlers.pressed = true;
+            handlers.on_press_in.clone()
+        } else if state == UIGestureRecognizerState::Ended
+            || state == UIGestureRecognizerState::Cancelled
+            || state == UIGestureRecognizerState::Failed
+        {
+            if handlers.pressed {
+                handlers.pressed = false;
+                handlers.on_press_out.clone()
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    });
+
+    if let Some(callback) = callback {
+        callback.call();
+    }
+}
+
+fn handle_swipe_recognized(recognizer: &UIGestureRecognizer) {
+    if unsafe { recognizer.state() } != UIGestureRecognizerState::Recognized {
+        return;
+    }
+    let Some(tag) = recognizer_tag(recognizer) else {
+        return;
+    };
+    let direction_bits = unsafe {
+        let bits: usize = msg_send![recognizer, direction];
+        bits as u8
+    };
+    let callback =
+        SWIPE_HANDLERS.with(|handlers| handlers.borrow().get(&(tag, direction_bits)).cloned());
+
+    if let Some(callback) = callback {
+        callback.call();
+    }
+}
+
+#[derive(Default)]
+struct ScrollHandlers {
+    on_scroll: Option<ScrollCallback>,
+    on_begin: Option<Callback>,
+    on_end: Option<Callback>,
+    last_offset: Option<(f32, f32)>,
+    last_instant: Option<Instant>,
+}
+
+fn update_scroll_handlers(tag: u64, update: impl FnOnce(&mut ScrollHandlers)) {
+    SCROLL_HANDLERS.with(|handlers| {
+        let mut handlers = handlers.borrow_mut();
+        update(handlers.entry(tag).or_default());
+    });
+}
+
+fn clear_scroll_handlers(tag: u64) {
+    SCROLL_HANDLERS.with(|handlers| {
+        handlers.borrow_mut().remove(&tag);
+    });
+}
+
+fn scroll_view_tag(scroll_view: &UIScrollView) -> u64 {
+    unsafe { scroll_view.tag() as u64 }
+}
+
+fn handle_scroll_did_scroll(tag: u64, offset_x: f32, offset_y: f32) {
+    let now = Instant::now();
+    let callback = SCROLL_HANDLERS.with(|handlers| {
+        let mut handlers = handlers.borrow_mut();
+        let state = handlers.get_mut(&tag)?;
+        let (velocity_x, velocity_y) = match (state.last_offset, state.last_instant) {
+            (Some((last_x, last_y)), Some(last_instant)) => {
+                let dt = now.duration_since(last_instant).as_secs_f32();
+                if dt > 0.0 {
+                    ((offset_x - last_x) / dt, (offset_y - last_y) / dt)
+                } else {
+                    (0.0, 0.0)
+                }
+            }
+            _ => (0.0, 0.0),
+        };
+
+        state.last_offset = Some((offset_x, offset_y));
+        state.last_instant = Some(now);
+        state.on_scroll.clone().map(|cb| {
+            (
+                cb,
+                ScrollInfo {
+                    offset_x,
+                    offset_y,
+                    velocity_x,
+                    velocity_y,
+                },
+            )
+        })
+    });
+
+    if let Some((callback, info)) = callback {
+        callback.call(info);
+    }
+}
+
+fn handle_scroll_begin(tag: u64) {
+    let callback = SCROLL_HANDLERS.with(|handlers| {
+        let mut handlers = handlers.borrow_mut();
+        let state = handlers.get_mut(&tag)?;
+        state.last_offset = None;
+        state.last_instant = None;
+        state.on_begin.clone()
+    });
+
+    if let Some(callback) = callback {
+        callback.call();
+    }
+}
+
+fn handle_scroll_end(tag: u64) {
+    let callback = SCROLL_HANDLERS.with(|handlers| {
+        let mut handlers = handlers.borrow_mut();
+        let state = handlers.get_mut(&tag)?;
+        state.last_offset = None;
+        state.last_instant = None;
+        state.on_end.clone()
+    });
+
+    if let Some(callback) = callback {
+        callback.call();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -508,6 +1028,30 @@ define_class!(
             handle_text_changed(tag, text);
         }
 
+        #[unsafe(method(textField:shouldChangeCharactersInRange:replacementString:))]
+        fn text_field_should_change_characters(
+            &self,
+            sender: &UITextField,
+            range: NSRange,
+            replacement: &NSString,
+        ) -> bool {
+            let tag = unsafe { sender.tag() } as u64;
+            let current = sender.text();
+            should_allow_text_edit(tag, current.as_deref(), range, replacement)
+        }
+
+        #[unsafe(method(textView:shouldChangeTextInRange:replacementText:))]
+        fn text_view_should_change_text(
+            &self,
+            sender: &UITextView,
+            range: NSRange,
+            replacement: &NSString,
+        ) -> bool {
+            let tag = unsafe { sender.tag() } as u64;
+            let current = sender.text();
+            should_allow_text_edit(tag, Some(&current), range, replacement)
+        }
+
         #[unsafe(method(tapRecognized:))]
         fn tap_recognized(&self, recognizer: &UITapGestureRecognizer) {
             if let Some(tag) = recognizer_tag(recognizer) {
@@ -531,6 +1075,16 @@ define_class!(
             }
         }
 
+        #[unsafe(method(pressRecognized:))]
+        fn press_recognized(&self, recognizer: &UILongPressGestureRecognizer) {
+            handle_press_recognized(recognizer);
+        }
+
+        #[unsafe(method(swipeRecognized:))]
+        fn swipe_recognized(&self, recognizer: &UIGestureRecognizer) {
+            handle_swipe_recognized(recognizer);
+        }
+
         #[unsafe(method(contextMenuLongPress:))]
         fn context_menu_long_press(&self, recognizer: &UILongPressGestureRecognizer) {
             if unsafe { recognizer.state() } == UIGestureRecognizerState::Began {
@@ -544,6 +1098,11 @@ define_class!(
         fn handle_refresh(&self, sender: &UIControl) {
             let tag = unsafe { sender.tag() } as u64;
             dispatch_target_event(|target| Event::Refresh { target }, tag);
+        }
+
+        #[unsafe(method(accessibilityAction:))]
+        fn accessibility_action(&self, action: &UIAccessibilityCustomAction) -> bool {
+            handle_accessibility_custom_action(action)
         }
 
         #[unsafe(method(textFieldShouldReturn:))]
@@ -642,6 +1201,51 @@ define_class!(
 define_class!(
     #[unsafe(super(NSObject))]
     #[thread_kind = MainThreadOnly]
+    #[name = "RaxScrollDelegate"]
+    struct ScrollDelegate;
+
+    unsafe impl NSObjectProtocol for ScrollDelegate {}
+
+    #[allow(non_snake_case)]
+    unsafe impl UIScrollViewDelegate for ScrollDelegate {
+        #[unsafe(method(scrollViewDidScroll:))]
+        fn scrollViewDidScroll(&self, scroll_view: &UIScrollView) {
+            let tag = scroll_view_tag(scroll_view);
+            let offset = scroll_view.contentOffset();
+            handle_scroll_did_scroll(tag, offset.x as f32, offset.y as f32);
+        }
+
+        #[unsafe(method(scrollViewWillBeginDragging:))]
+        fn scrollViewWillBeginDragging(&self, scroll_view: &UIScrollView) {
+            handle_scroll_begin(scroll_view_tag(scroll_view));
+        }
+
+        #[unsafe(method(scrollViewDidEndDragging:willDecelerate:))]
+        fn scrollViewDidEndDragging_willDecelerate(
+            &self,
+            scroll_view: &UIScrollView,
+            decelerate: bool,
+        ) {
+            if !decelerate {
+                handle_scroll_end(scroll_view_tag(scroll_view));
+            }
+        }
+
+        #[unsafe(method(scrollViewDidEndDecelerating:))]
+        fn scrollViewDidEndDecelerating(&self, scroll_view: &UIScrollView) {
+            handle_scroll_end(scroll_view_tag(scroll_view));
+        }
+
+        #[unsafe(method(scrollViewDidEndScrollingAnimation:))]
+        fn scrollViewDidEndScrollingAnimation(&self, scroll_view: &UIScrollView) {
+            handle_scroll_end(scroll_view_tag(scroll_view));
+        }
+    }
+);
+
+define_class!(
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
     #[name = "RaxTicker"]
     struct Ticker;
 
@@ -670,6 +1274,26 @@ define_class!(
             setup(mtm);
         }
 
+        #[unsafe(method(applicationDidBecomeActive:))]
+        fn application_did_become_active(&self, _application: &AnyObject) {
+            queue_app_lifecycle(Lifecycle::Resumed);
+        }
+
+        #[unsafe(method(applicationWillResignActive:))]
+        fn application_will_resign_active(&self, _application: &AnyObject) {
+            queue_app_lifecycle(Lifecycle::Inactive);
+        }
+
+        #[unsafe(method(applicationDidEnterBackground:))]
+        fn application_did_enter_background(&self, _application: &AnyObject) {
+            queue_app_lifecycle(Lifecycle::Backgrounded);
+        }
+
+        #[unsafe(method(applicationWillTerminate:))]
+        fn application_will_terminate(&self, _application: &AnyObject) {
+            queue_app_lifecycle(Lifecycle::Terminating);
+        }
+
         #[unsafe(method(application:openURL:options:))]
         fn application_open_url(
             &self,
@@ -683,6 +1307,26 @@ define_class!(
                 PENDING_DEEP_LINKS.with(|q| q.borrow_mut().push(url_string));
             }
             true
+        }
+
+        #[unsafe(method(application:didRegisterForRemoteNotificationsWithDeviceToken:))]
+        fn did_register_for_remote_notifications(
+            &self,
+            _application: &AnyObject,
+            device_token: &NSData,
+        ) {
+            if let Some(token) = apns_device_token_hex(device_token) {
+                crate::runtime::update_push_token(token);
+            }
+        }
+
+        #[unsafe(method(application:didFailToRegisterForRemoteNotificationsWithError:))]
+        fn did_fail_to_register_for_remote_notifications(
+            &self,
+            _application: &AnyObject,
+            _error: &AnyObject,
+        ) {
+            crate::runtime::clear_push_token();
         }
     }
 );
@@ -771,6 +1415,401 @@ define_class!(
     }
 );
 
+fn apns_device_token_hex(device_token: &NSData) -> Option<String> {
+    unsafe {
+        let len: usize = msg_send![device_token, length];
+        let bytes: *const u8 = msg_send![device_token, bytes];
+        if bytes.is_null() || len == 0 {
+            return None;
+        }
+
+        let slice = std::slice::from_raw_parts(bytes, len);
+        let mut token = String::with_capacity(len * 2);
+        use std::fmt::Write as _;
+        for byte in slice {
+            let _ = write!(&mut token, "{byte:02x}");
+        }
+        Some(token)
+    }
+}
+
+fn objc_class(name: &str) -> Option<&'static objc2::runtime::AnyClass> {
+    use std::ffi::CString;
+    let c = CString::new(name).ok()?;
+    objc2::runtime::AnyClass::get(c.as_c_str())
+}
+
+fn queue_permission_result(permission: PermissionKind, status: PermissionStatus) {
+    if let Ok(mut results) = PENDING_PERMISSION_RESULTS.lock() {
+        results.push((permission, status));
+    }
+}
+
+fn queue_media_result(images: Vec<Arc<Vec<u8>>>) {
+    if let Ok(mut results) = PENDING_MEDIA_RESULTS.lock() {
+        results.push(images);
+    }
+}
+
+fn queue_media_cancel() {
+    if let Ok(mut cancellations) = PENDING_MEDIA_CANCELS.lock() {
+        *cancellations = cancellations.saturating_add(1);
+    }
+}
+
+struct MediaLoadState {
+    remaining: usize,
+    images: Vec<Arc<Vec<u8>>>,
+}
+
+fn load_ios_media_picker_results(results: &NSMutableArray<AnyObject>) {
+    let count: usize = unsafe { msg_send![results, count] };
+    if count == 0 {
+        queue_media_cancel();
+        return;
+    }
+
+    let state = Arc::new(Mutex::new(MediaLoadState {
+        remaining: count,
+        images: Vec::with_capacity(count),
+    }));
+
+    for index in 0..count {
+        let result: *mut AnyObject = unsafe { msg_send![results, objectAtIndex: index] };
+        if result.is_null() {
+            complete_ios_media_load(state.clone(), None);
+            continue;
+        }
+
+        let provider: *mut AnyObject = unsafe { msg_send![result, itemProvider] };
+        let type_identifier = match ios_media_provider_type(provider) {
+            Some(identifier) => identifier,
+            None => {
+                complete_ios_media_load(state.clone(), None);
+                continue;
+            }
+        };
+
+        unsafe { objc_retain(provider) };
+        let state_for_block = state.clone();
+        let completion = RcBlock::new(move |data: *mut AnyObject, _error: *mut NSObject| {
+            let bytes = unsafe { nsdata_to_arc_bytes(data) };
+            complete_ios_media_load(state_for_block.clone(), bytes);
+            unsafe { objc_release(provider) };
+        });
+        unsafe {
+            let identifier = NSString::from_str(type_identifier);
+            let _: () = msg_send![
+                provider,
+                loadDataRepresentationForTypeIdentifier: &*identifier
+                completionHandler: &*completion
+            ];
+        }
+    }
+}
+
+fn ios_media_provider_type(provider: *mut AnyObject) -> Option<&'static str> {
+    if provider.is_null() {
+        return None;
+    }
+    for identifier in ["public.image", "public.jpeg", "public.png"] {
+        let ns = NSString::from_str(identifier);
+        let supported: bool =
+            unsafe { msg_send![provider, hasItemConformingToTypeIdentifier: &*ns] };
+        if supported {
+            return Some(identifier);
+        }
+    }
+    None
+}
+
+fn complete_ios_media_load(state: Arc<Mutex<MediaLoadState>>, bytes: Option<Arc<Vec<u8>>>) {
+    let finished = {
+        let Ok(mut state) = state.lock() else {
+            return;
+        };
+        if let Some(bytes) = bytes {
+            state.images.push(bytes);
+        }
+        state.remaining = state.remaining.saturating_sub(1);
+        if state.remaining == 0 {
+            Some(std::mem::take(&mut state.images))
+        } else {
+            None
+        }
+    };
+
+    if let Some(images) = finished {
+        if images.is_empty() {
+            queue_media_cancel();
+        } else {
+            queue_media_result(images);
+        }
+    }
+}
+
+unsafe fn nsdata_to_arc_bytes(data: *mut AnyObject) -> Option<Arc<Vec<u8>>> {
+    if data.is_null() {
+        return None;
+    }
+    let len: usize = msg_send![data, length];
+    let ptr: *const u8 = msg_send![data, bytes];
+    if ptr.is_null() || len == 0 {
+        return None;
+    }
+    Some(Arc::new(std::slice::from_raw_parts(ptr, len).to_vec()))
+}
+
+fn permission_from_av_status(status: isize) -> PermissionStatus {
+    match status {
+        0 => PermissionStatus::NotDetermined,
+        1 => PermissionStatus::Restricted,
+        2 => PermissionStatus::Denied,
+        3 => PermissionStatus::Granted,
+        _ => PermissionStatus::Unknown,
+    }
+}
+
+fn permission_from_location_status(status: isize) -> PermissionStatus {
+    match status {
+        0 => PermissionStatus::NotDetermined,
+        1 => PermissionStatus::Restricted,
+        2 => PermissionStatus::Denied,
+        3 | 4 => PermissionStatus::Granted,
+        _ => PermissionStatus::Unknown,
+    }
+}
+
+fn permission_from_photo_status(status: isize) -> PermissionStatus {
+    match status {
+        0 => PermissionStatus::NotDetermined,
+        1 => PermissionStatus::Restricted,
+        2 => PermissionStatus::Denied,
+        3 => PermissionStatus::Granted,
+        4 => PermissionStatus::Limited,
+        _ => PermissionStatus::Unknown,
+    }
+}
+
+fn permission_from_notification_status(status: isize) -> PermissionStatus {
+    match status {
+        0 => PermissionStatus::NotDetermined,
+        1 => PermissionStatus::Denied,
+        2 | 3 | 4 => PermissionStatus::Granted,
+        _ => PermissionStatus::Unknown,
+    }
+}
+
+fn av_media_type_for_permission(permission: PermissionKind) -> Option<Retained<NSString>> {
+    match permission {
+        PermissionKind::Camera => Some(NSString::from_str("vide")),
+        PermissionKind::Microphone => Some(NSString::from_str("soun")),
+        _ => None,
+    }
+}
+
+fn check_ios_permission(permission: PermissionKind) {
+    unsafe {
+        let status = match permission {
+            PermissionKind::Location => {
+                let status: isize = msg_send![class!(CLLocationManager), authorizationStatus];
+                permission_from_location_status(status)
+            }
+            PermissionKind::Camera | PermissionKind::Microphone => {
+                let Some(media_type) = av_media_type_for_permission(permission) else {
+                    return;
+                };
+                let status: isize = msg_send![
+                    av_class("AVCaptureDevice"),
+                    authorizationStatusForMediaType: &*media_type
+                ];
+                permission_from_av_status(status)
+            }
+            PermissionKind::Photos => {
+                let Some(photo_library) = objc_class("PHPhotoLibrary") else {
+                    queue_permission_result(permission, PermissionStatus::Unsupported);
+                    return;
+                };
+                let status: isize = msg_send![photo_library, authorizationStatus];
+                permission_from_photo_status(status)
+            }
+            PermissionKind::Notifications => {
+                check_ios_notification_permission();
+                return;
+            }
+            PermissionKind::Motion => PermissionStatus::Granted,
+        };
+        queue_permission_result(permission, status);
+    }
+}
+
+fn check_ios_notification_permission() {
+    unsafe {
+        let center: *mut AnyObject =
+            msg_send![class!(UNUserNotificationCenter), currentNotificationCenter];
+        if center.is_null() {
+            queue_permission_result(PermissionKind::Notifications, PermissionStatus::Unsupported);
+            return;
+        }
+        let completion = RcBlock::new(|settings: *mut AnyObject| {
+            if settings.is_null() {
+                queue_permission_result(PermissionKind::Notifications, PermissionStatus::Unknown);
+                return;
+            }
+            let status: isize = msg_send![settings, authorizationStatus];
+            queue_permission_result(
+                PermissionKind::Notifications,
+                permission_from_notification_status(status),
+            );
+        });
+        let _: () = msg_send![
+            center,
+            getNotificationSettingsWithCompletionHandler: &*completion
+        ];
+    }
+}
+
+fn request_ios_permission(permission: PermissionKind) {
+    match permission {
+        PermissionKind::Location => request_ios_location_permission(),
+        PermissionKind::Camera | PermissionKind::Microphone => {
+            request_ios_av_permission(permission);
+        }
+        PermissionKind::Photos => request_ios_photo_permission(),
+        PermissionKind::Notifications => request_ios_notification_permission(),
+        PermissionKind::Motion => {
+            queue_permission_result(PermissionKind::Motion, PermissionStatus::Granted);
+        }
+    }
+}
+
+fn request_ios_location_permission() {
+    unsafe {
+        let mgr: *mut AnyObject = msg_send![class!(CLLocationManager), new];
+        if mgr.is_null() {
+            queue_permission_result(PermissionKind::Location, PermissionStatus::Unsupported);
+            return;
+        }
+
+        let delegate: Retained<LocationDelegate> = msg_send![LocationDelegate::class(), new];
+        let _: () = msg_send![mgr, setDelegate: &*delegate];
+        let _: () = msg_send![mgr, requestWhenInUseAuthorization];
+        PERMISSION_LOCATION_MANAGER.with(|lm| {
+            let old = {
+                let mut slot = lm.borrow_mut();
+                slot.replace(mgr)
+            };
+            if let Some(old) = old {
+                let nil_delegate: *const AnyObject = std::ptr::null();
+                let _: () = msg_send![old, setDelegate: nil_delegate];
+                objc_release(old);
+            }
+        });
+        PERMISSION_LOCATION_DELEGATE.with(|d| *d.borrow_mut() = Some(delegate));
+        check_ios_permission(PermissionKind::Location);
+    }
+}
+
+fn request_ios_av_permission(permission: PermissionKind) {
+    let Some(media_type) = av_media_type_for_permission(permission) else {
+        return;
+    };
+    unsafe {
+        let completion = RcBlock::new(move |granted: objc2::runtime::Bool| {
+            let status = if granted.as_bool() {
+                PermissionStatus::Granted
+            } else {
+                PermissionStatus::Denied
+            };
+            queue_permission_result(permission, status);
+        });
+        let _: () = msg_send![
+            av_class("AVCaptureDevice"),
+            requestAccessForMediaType: &*media_type
+            completionHandler: &*completion
+        ];
+    }
+}
+
+fn request_ios_photo_permission() {
+    unsafe {
+        let Some(photo_library) = objc_class("PHPhotoLibrary") else {
+            queue_permission_result(PermissionKind::Photos, PermissionStatus::Unsupported);
+            return;
+        };
+        let completion = RcBlock::new(|status: isize| {
+            queue_permission_result(PermissionKind::Photos, permission_from_photo_status(status));
+        });
+        let _: () = msg_send![photo_library, requestAuthorization: &*completion];
+    }
+}
+
+fn request_ios_notification_permission() {
+    unsafe {
+        let center: *mut AnyObject =
+            msg_send![class!(UNUserNotificationCenter), currentNotificationCenter];
+        if center.is_null() {
+            queue_permission_result(PermissionKind::Notifications, PermissionStatus::Unsupported);
+            return;
+        }
+        let completion = RcBlock::new(|granted: objc2::runtime::Bool, _error: *mut NSObject| {
+            let status = if granted.as_bool() {
+                PermissionStatus::Granted
+            } else {
+                PermissionStatus::Denied
+            };
+            queue_permission_result(PermissionKind::Notifications, status);
+        });
+        let _: () = msg_send![
+            center,
+            requestAuthorizationWithOptions: 0b111usize
+            completionHandler: &*completion
+        ];
+    }
+}
+
+fn start_ios_location_updates() {
+    unsafe {
+        let mgr: *mut AnyObject = msg_send![class!(CLLocationManager), new];
+        if mgr.is_null() {
+            return;
+        }
+
+        let delegate: Retained<LocationDelegate> = msg_send![LocationDelegate::class(), new];
+        let _: () = msg_send![mgr, setDelegate: &*delegate];
+        let _: () = msg_send![mgr, requestWhenInUseAuthorization];
+        let _: () = msg_send![mgr, startUpdatingLocation];
+
+        LOCATION_MANAGER.with(|lm| {
+            let old = {
+                let mut slot = lm.borrow_mut();
+                slot.replace(mgr)
+            };
+            if let Some(old) = old {
+                let nil_delegate: *const AnyObject = std::ptr::null();
+                let _: () = msg_send![old, setDelegate: nil_delegate];
+                let _: () = msg_send![old, stopUpdatingLocation];
+                objc_release(old);
+            }
+        });
+        LOCATION_DELEGATE.with(|d| *d.borrow_mut() = Some(delegate));
+    }
+}
+
+fn stop_ios_location_updates() {
+    LOCATION_MANAGER.with(|lm| {
+        if let Some(mgr) = lm.borrow_mut().take() {
+            unsafe {
+                let nil_delegate: *const AnyObject = std::ptr::null();
+                let _: () = msg_send![mgr, setDelegate: nil_delegate];
+                let _: () = msg_send![mgr, stopUpdatingLocation];
+                objc_release(mgr);
+            }
+        }
+    });
+    LOCATION_DELEGATE.with(|d| *d.borrow_mut() = None);
+}
+
 define_class!(
     /// CLLocationManagerDelegate that queues GPS fixes and auth denials for the next tick.
     #[unsafe(super(NSObject))]
@@ -810,6 +1849,7 @@ define_class!(
         #[unsafe(method(locationManager:didFailWithError:))]
         fn did_fail(&self, _manager: &AnyObject, _error: &AnyObject) {
             PENDING_LOCATION_DENIED.with(|c| c.set(true));
+            queue_permission_result(PermissionKind::Location, PermissionStatus::Denied);
         }
 
         /// `locationManagerDidChangeAuthorization:` — fires on iOS 14+ when status changes.
@@ -820,6 +1860,7 @@ define_class!(
             if status == 1 || status == 2 {
                 PENDING_LOCATION_DENIED.with(|c| c.set(true));
             }
+            queue_permission_result(PermissionKind::Location, permission_from_location_status(status));
         }
     }
 );
@@ -844,17 +1885,13 @@ define_class!(
 
             let count: usize = unsafe { msg_send![results, count] };
             if count == 0 {
-                PENDING_MEDIA_CANCEL.with(|c| c.set(true));
+                queue_media_cancel();
                 // Drop the delegate reference now that we are done.
                 MEDIA_PICKER_DELEGATE.with(|d| *d.borrow_mut() = None);
                 return;
             }
 
-            // First version: signal that media was picked with empty byte payloads.
-            // Full async loading via NSItemProvider requires dispatch queues and is
-            // planned as a follow-up (see roadmap). The app receives MediaPicked with
-            // an empty images vec and can display a confirmation or trigger its own load.
-            PENDING_MEDIA.with(|q| q.borrow_mut().push(vec![]));
+            load_ios_media_picker_results(results);
             // Drop the delegate now that the pick is complete.
             MEDIA_PICKER_DELEGATE.with(|d| *d.borrow_mut() = None);
         }
@@ -944,6 +1981,73 @@ unsafe fn objc_retain(obj: *mut AnyObject) {
 unsafe fn objc_release(obj: *mut AnyObject) {
     if !obj.is_null() {
         let _: () = msg_send![obj, release];
+    }
+}
+
+fn set_ios_torch(on: bool) {
+    unsafe {
+        let media_type = NSString::from_str("vide"); // AVMediaTypeVideo
+        let device: *mut AnyObject = msg_send![
+            av_class("AVCaptureDevice"),
+            defaultDeviceWithMediaType: &*media_type
+        ];
+        if device.is_null() {
+            return;
+        }
+
+        let has_torch: bool = msg_send![device, hasTorch];
+        if !has_torch {
+            return;
+        }
+        if on {
+            let available: bool = msg_send![device, isTorchAvailable];
+            if !available {
+                return;
+            }
+        }
+
+        let mut error: *mut AnyObject = std::ptr::null_mut();
+        let locked: bool = msg_send![device, lockForConfiguration: &mut error];
+        if !locked || !error.is_null() {
+            return;
+        }
+
+        // AVCaptureTorchModeOff = 0, On = 1.
+        let mode: isize = if on { 1 } else { 0 };
+        let _: () = msg_send![device, setTorchMode: mode];
+        let _: () = msg_send![device, unlockForConfiguration];
+    }
+}
+
+fn register_ios_remote_notifications() {
+    unsafe {
+        let center: *mut AnyObject =
+            msg_send![class!(UNUserNotificationCenter), currentNotificationCenter];
+        if !center.is_null() {
+            // UNAuthorizationOptionBadge | Sound | Alert.
+            let options: usize = 1 | 2 | 4;
+            let completion =
+                RcBlock::new(|_granted: objc2::runtime::Bool, _error: *mut NSObject| {});
+            let _: () = msg_send![
+                center,
+                requestAuthorizationWithOptions: options
+                completionHandler: &*completion
+            ];
+        }
+
+        let app: *mut AnyObject = msg_send![class!(UIApplication), sharedApplication];
+        if !app.is_null() {
+            let _: () = msg_send![app, registerForRemoteNotifications];
+        }
+    }
+}
+
+fn set_ios_app_badge(count: u32) {
+    unsafe {
+        let app: *mut AnyObject = msg_send![class!(UIApplication), sharedApplication];
+        if !app.is_null() {
+            let _: () = msg_send![app, setApplicationIconBadgeNumber: count as isize];
+        }
     }
 }
 
@@ -1044,7 +2148,8 @@ fn setup_qr_scanner(view: *const UIView, widget_tag: u64) {
         objc_retain(delegate);
 
         QR_SESSIONS.with(|map| {
-            map.borrow_mut().insert(widget_tag, QrEntry { session, delegate });
+            map.borrow_mut()
+                .insert(widget_tag, QrEntry { session, delegate });
         });
 
         // Release the initial +new reference — the map entry holds the only
@@ -1122,6 +2227,11 @@ fn setup(mtm: MainThreadMarker) {
         action_target: action_target.clone(),
         views: HashMap::new(),
         gradient_layers: HashMap::new(),
+        blur_views: HashMap::new(),
+        accessibility_action_lists: HashMap::new(),
+        scroll_delegates: HashMap::new(),
+        press_recognizers: HashMap::new(),
+        swipe_recognizers: HashMap::new(),
     };
 
     let viewport = Size::new(bounds.size.width as f32, bounds.size.height as f32);
@@ -1159,7 +2269,11 @@ fn setup(mtm: MainThreadMarker) {
         // SAFETY: this is a best-effort ProMotion request; if the selector doesn't
         // exist on the running OS version it will no-op at the ObjC runtime level.
         let sel_set_preferred_frame_rate_range = objc2::sel!(setPreferredFrameRateRange:);
-        let range = CAFrameRateRange { minimum: 60.0, maximum: 120.0, preferred: 120.0 };
+        let range = CAFrameRateRange {
+            minimum: 60.0,
+            maximum: 120.0,
+            preferred: 120.0,
+        };
         let fn_ptr: unsafe extern "C" fn(*const AnyObject, objc2::runtime::Sel, CAFrameRateRange) =
             std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
         fn_ptr(
@@ -1220,6 +2334,18 @@ struct UiKitBackend {
     /// Gradient sublayers keyed by widget id, so we can resize them to match the
     /// view's bounds whenever its frame changes.
     gradient_layers: HashMap<u64, Retained<CAGradientLayer>>,
+    /// Native blur subviews keyed by widget id. They are inserted behind
+    /// regular children and resized with the owning view's bounds.
+    blur_views: HashMap<u64, Retained<UIVisualEffectView>>,
+    /// Retained iOS custom accessibility action arrays keyed by widget id.
+    accessibility_action_lists: HashMap<u64, Retained<NSMutableArray<UIAccessibilityCustomAction>>>,
+    /// Scroll delegates keyed by widget id. `UIScrollView.delegate` is weak, so
+    /// the backend must hold these strongly for as long as the view exists.
+    scroll_delegates: HashMap<u64, Retained<ScrollDelegate>>,
+    /// Zero-duration long-press recognizers used for press-in / press-out callbacks.
+    press_recognizers: HashMap<u64, Retained<UILongPressGestureRecognizer>>,
+    /// Directional swipe recognizers keyed by widget id and UIKit direction bits.
+    swipe_recognizers: HashMap<(u64, u8), Retained<UIGestureRecognizer>>,
 }
 
 impl UiKitBackend {
@@ -1246,6 +2372,257 @@ impl UiKitBackend {
             );
             view.addGestureRecognizer(&r);
         }
+    }
+
+    fn install_scroll_delegate(&mut self, id: WidgetId, scroll_view: &UIScrollView) {
+        let tag = id.to_u64();
+        scroll_view.setTag(tag as isize);
+        let delegate = self
+            .scroll_delegates
+            .entry(tag)
+            .or_insert_with(new_instance::<ScrollDelegate>);
+        let protocol_delegate: &ProtocolObject<dyn UIScrollViewDelegate> =
+            ProtocolObject::from_ref(&**delegate);
+        unsafe {
+            scroll_view.setDelegate(Some(protocol_delegate));
+        }
+    }
+
+    fn clear_scroll_delegate(&mut self, id: WidgetId) {
+        let tag = id.to_u64();
+        if let Some(view) = self.views.get(&tag) {
+            if let Ok(scroll_view) = view.clone().downcast::<UIScrollView>() {
+                unsafe {
+                    scroll_view.setDelegate(None);
+                }
+            }
+        }
+        self.scroll_delegates.remove(&tag);
+        clear_scroll_handlers(tag);
+    }
+
+    fn install_press_recognizer(&mut self, id: WidgetId, view: &UIView) {
+        let tag = id.to_u64();
+        if self.press_recognizers.contains_key(&tag) {
+            return;
+        }
+
+        unsafe {
+            view.setUserInteractionEnabled(true);
+            view.setTag(tag as isize);
+        }
+        let recognizer = unsafe {
+            UILongPressGestureRecognizer::initWithTarget_action(
+                self.mtm.alloc(),
+                Some(&self.action_target),
+                Some(sel!(pressRecognized:)),
+            )
+        };
+        recognizer.setMinimumPressDuration(0.0);
+        unsafe {
+            let _: () = msg_send![&*recognizer, setCancelsTouchesInView: false];
+            let _: () = msg_send![&*recognizer, setDelaysTouchesBegan: false];
+            let _: () = msg_send![&*recognizer, setDelaysTouchesEnded: false];
+            let _: () = msg_send![&*recognizer, setDelegate: &*self.action_target];
+        }
+        view.addGestureRecognizer(&recognizer);
+        self.press_recognizers.insert(tag, recognizer);
+    }
+
+    fn install_swipe_recognizer(&mut self, id: WidgetId, view: &UIView, direction: SwipeDirection) {
+        let tag = id.to_u64();
+        let direction_bits = swipe_direction_bits(direction);
+        let key = (tag, direction_bits);
+        if self.swipe_recognizers.contains_key(&key) {
+            return;
+        }
+
+        unsafe {
+            view.setUserInteractionEnabled(true);
+            view.setTag(tag as isize);
+            let recognizer: *mut AnyObject = msg_send![class!(UISwipeGestureRecognizer), alloc];
+            let recognizer: *mut AnyObject = msg_send![
+                recognizer,
+                initWithTarget: &*self.action_target
+                action: sel!(swipeRecognized:)
+            ];
+            if recognizer.is_null() {
+                return;
+            }
+            let _: () = msg_send![recognizer, setDirection: direction_bits as usize];
+            let _: () = msg_send![recognizer, setCancelsTouchesInView: false];
+            let _: () = msg_send![recognizer, setDelegate: &*self.action_target];
+            let recognizer = Retained::from_raw(recognizer.cast::<UIGestureRecognizer>())
+                .expect("UISwipeGestureRecognizer init returned a valid object");
+            view.addGestureRecognizer(&recognizer);
+            self.swipe_recognizers.insert(key, recognizer);
+        }
+    }
+
+    fn clear_interaction_recognizers(&mut self, id: WidgetId) {
+        let tag = id.to_u64();
+        self.press_recognizers.remove(&tag);
+        self.swipe_recognizers
+            .retain(|(recognizer_tag, _), _| *recognizer_tag != tag);
+        clear_interaction_handlers(tag);
+    }
+
+    fn blur_frame_for(view: &UIView) -> CGRect {
+        let bounds = view.bounds();
+        CGRect {
+            origin: CGPoint { x: 0.0, y: 0.0 },
+            size: bounds.size,
+        }
+    }
+
+    fn blur_style_for_radius(radius: f32) -> UIBlurEffectStyle {
+        if radius >= 24.0 {
+            UIBlurEffectStyle::Prominent
+        } else if radius >= 10.0 {
+            UIBlurEffectStyle::Regular
+        } else {
+            UIBlurEffectStyle::Light
+        }
+    }
+
+    fn blur_alpha_for_radius(radius: f32) -> f64 {
+        (radius / 20.0).clamp(0.15, 1.0) as f64
+    }
+
+    fn apply_blur(&mut self, id: WidgetId, view: &UIView, radius: f32) {
+        let tag = id.to_u64();
+        if radius <= 0.0 {
+            self.clear_blur(id);
+            return;
+        }
+
+        let effect = UIBlurEffect::effectWithStyle(Self::blur_style_for_radius(radius), self.mtm);
+        let frame = Self::blur_frame_for(view);
+        let alpha = Self::blur_alpha_for_radius(radius);
+
+        if let Some(blur_view) = self.blur_views.get(&tag) {
+            blur_view.setEffect(Some(effect.as_super()));
+            let blur_view = blur_view.as_super();
+            blur_view.setFrame(frame);
+            blur_view.setAlpha(alpha);
+            view.sendSubviewToBack(blur_view);
+            return;
+        }
+
+        let blur_view =
+            UIVisualEffectView::initWithEffect(self.mtm.alloc(), Some(effect.as_super()));
+        let blur_as_view = blur_view.as_super();
+        blur_as_view.setFrame(frame);
+        blur_as_view.setAlpha(alpha);
+        blur_as_view.setUserInteractionEnabled(false);
+        view.insertSubview_atIndex(blur_as_view, 0);
+        self.blur_views.insert(tag, blur_view);
+    }
+
+    fn update_blur_frame(&self, id: WidgetId, frame: CGRect) {
+        if let Some(blur_view) = self.blur_views.get(&id.to_u64()) {
+            blur_view.as_super().setFrame(CGRect {
+                origin: CGPoint { x: 0.0, y: 0.0 },
+                size: frame.size,
+            });
+        }
+    }
+
+    fn clear_blur(&mut self, id: WidgetId) {
+        if let Some(blur_view) = self.blur_views.remove(&id.to_u64()) {
+            blur_view.as_super().removeFromSuperview();
+        }
+    }
+
+    fn install_accessibility_actions(&mut self, id: WidgetId, view: &UIView, actions: Vec<String>) {
+        let tag = id.to_u64();
+        clear_accessibility_action_payloads(tag);
+
+        if actions.is_empty() {
+            unsafe {
+                let _: () = msg_send![
+                    &*view,
+                    setAccessibilityCustomActions: std::ptr::null::<AnyObject>()
+                ];
+            }
+            self.accessibility_action_lists.remove(&tag);
+            return;
+        }
+
+        let native_actions = NSMutableArray::<UIAccessibilityCustomAction>::new();
+        for action_name in actions {
+            if action_name.is_empty() {
+                continue;
+            }
+            let ns = NSString::from_str(&action_name);
+            let action: *mut UIAccessibilityCustomAction = unsafe {
+                let allocated: *mut AnyObject =
+                    msg_send![class!(UIAccessibilityCustomAction), alloc];
+                let initialized: *mut AnyObject = msg_send![
+                    allocated,
+                    initWithName: &*ns
+                    target: &*self.action_target
+                    selector: sel!(accessibilityAction:)
+                ];
+                initialized.cast()
+            };
+            let Some(action) = (unsafe { Retained::from_raw(action) }) else {
+                continue;
+            };
+            register_accessibility_action_payload(&action, tag, action_name);
+            native_actions.addObject(&action);
+        }
+
+        if native_actions.is_empty() {
+            unsafe {
+                let _: () = msg_send![
+                    &*view,
+                    setAccessibilityCustomActions: std::ptr::null::<AnyObject>()
+                ];
+            }
+            self.accessibility_action_lists.remove(&tag);
+            return;
+        }
+
+        unsafe {
+            let _: () = msg_send![&*view, setIsAccessibilityElement: true];
+            let _: () = msg_send![&*view, setAccessibilityCustomActions: &*native_actions];
+        }
+        self.accessibility_action_lists.insert(tag, native_actions);
+    }
+
+    fn clear_accessibility_actions(&mut self, id: WidgetId) {
+        let tag = id.to_u64();
+        if let Some(view) = self.views.get(&tag) {
+            unsafe {
+                let _: () = msg_send![
+                    &**view,
+                    setAccessibilityCustomActions: std::ptr::null::<AnyObject>()
+                ];
+            }
+        }
+        self.accessibility_action_lists.remove(&tag);
+        clear_accessibility_action_payloads(tag);
+    }
+
+    fn text_field_accessory_view(&self, text: &str) -> Retained<UIView> {
+        let width = (text.chars().count() as f64 * 8.5 + 12.0).max(20.0);
+        let frame = CGRect {
+            origin: CGPoint { x: 0.0, y: 0.0 },
+            size: CGSize {
+                width,
+                height: 34.0,
+            },
+        };
+        let label = unsafe { UILabel::initWithFrame(self.mtm.alloc(), frame) };
+        let ns = NSString::from_str(text);
+        unsafe {
+            label.setText(Some(&ns));
+            label.setTextAlignment(NSTextAlignment::Center);
+            label.setFont(Some(&UIFont::systemFontOfSize(15.0)));
+            label.setTextColor(Some(&to_ui_color(Color::rgb(107, 114, 128))));
+        }
+        label.into_super()
     }
 }
 
@@ -1279,8 +2656,14 @@ fn to_cg_color(c: Color) -> Retained<objc2_core_graphics::CGColor> {
 
 fn cg_rect(x: f32, y: f32, w: f32, h: f32) -> CGRect {
     CGRect {
-        origin: CGPoint { x: x as f64, y: y as f64 },
-        size: CGSize { width: w as f64, height: h as f64 },
+        origin: CGPoint {
+            x: x as f64,
+            y: y as f64,
+        },
+        size: CGSize {
+            width: w as f64,
+            height: h as f64,
+        },
     }
 }
 
@@ -1301,7 +2684,15 @@ fn render_canvas(view: &UIView, cmds: &[DrawCmd]) {
     unsafe {
         for cmd in cmds {
             match cmd {
-                DrawCmd::Rect { x, y, w, h, radius, fill, stroke } => {
+                DrawCmd::Rect {
+                    x,
+                    y,
+                    w,
+                    h,
+                    radius,
+                    fill,
+                    stroke,
+                } => {
                     let layer = CALayer::new();
                     let _: () = msg_send![&*layer, setFrame: cg_rect(*x, *y, *w, *h)];
                     if let Some(f) = fill {
@@ -1318,9 +2709,16 @@ fn render_canvas(view: &UIView, cmds: &[DrawCmd]) {
                     }
                     let _: () = msg_send![&*host, addSublayer: &*layer];
                 }
-                DrawCmd::Circle { cx, cy, r, fill, stroke } => {
+                DrawCmd::Circle {
+                    cx,
+                    cy,
+                    r,
+                    fill,
+                    stroke,
+                } => {
                     let layer = CALayer::new();
-                    let _: () = msg_send![&*layer, setFrame: cg_rect(cx - r, cy - r, r * 2.0, r * 2.0)];
+                    let _: () =
+                        msg_send![&*layer, setFrame: cg_rect(cx - r, cy - r, r * 2.0, r * 2.0)];
                     let _: () = msg_send![&*layer, setCornerRadius: *r as f64];
                     if let Some(f) = fill {
                         let cg = to_cg_color(*f);
@@ -1333,10 +2731,27 @@ fn render_canvas(view: &UIView, cmds: &[DrawCmd]) {
                     }
                     let _: () = msg_send![&*host, addSublayer: &*layer];
                 }
-                DrawCmd::Line { x1, y1, x2, y2, width, color } => {
+                DrawCmd::Line {
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+                    width,
+                    color,
+                } => {
                     let path = CGMutablePath::new();
-                    CGMutablePath::move_to_point(Some(&path), std::ptr::null(), *x1 as f64, *y1 as f64);
-                    CGMutablePath::add_line_to_point(Some(&path), std::ptr::null(), *x2 as f64, *y2 as f64);
+                    CGMutablePath::move_to_point(
+                        Some(&path),
+                        std::ptr::null(),
+                        *x1 as f64,
+                        *y1 as f64,
+                    );
+                    CGMutablePath::add_line_to_point(
+                        Some(&path),
+                        std::ptr::null(),
+                        *x2 as f64,
+                        *y2 as f64,
+                    );
                     let sl = CAShapeLayer::new();
                     let cg = to_cg_color(*color);
                     let _: () = msg_send![&*sl, setPath: &*path];
@@ -1345,15 +2760,30 @@ fn render_canvas(view: &UIView, cmds: &[DrawCmd]) {
                     let _: () = msg_send![&*sl, setLineWidth: *width as f64];
                     let _: () = msg_send![&*host, addSublayer: &*sl];
                 }
-                DrawCmd::Path { points, closed, fill, stroke } => {
+                DrawCmd::Path {
+                    points,
+                    closed,
+                    fill,
+                    stroke,
+                } => {
                     if points.is_empty() {
                         continue;
                     }
                     let path = CGMutablePath::new();
                     let (x0, y0) = points[0];
-                    CGMutablePath::move_to_point(Some(&path), std::ptr::null(), x0 as f64, y0 as f64);
+                    CGMutablePath::move_to_point(
+                        Some(&path),
+                        std::ptr::null(),
+                        x0 as f64,
+                        y0 as f64,
+                    );
                     for &(x, y) in &points[1..] {
-                        CGMutablePath::add_line_to_point(Some(&path), std::ptr::null(), x as f64, y as f64);
+                        CGMutablePath::add_line_to_point(
+                            Some(&path),
+                            std::ptr::null(),
+                            x as f64,
+                            y as f64,
+                        );
                     }
                     if *closed {
                         CGMutablePath::close_subpath(Some(&path));
@@ -1378,7 +2808,14 @@ fn render_canvas(view: &UIView, cmds: &[DrawCmd]) {
                     }
                     let _: () = msg_send![&*host, addSublayer: &*sl];
                 }
-                DrawCmd::Text { x, y, text, size, color, align } => {
+                DrawCmd::Text {
+                    x,
+                    y,
+                    text,
+                    size,
+                    color,
+                    align,
+                } => {
                     let tl = CATextLayer::new();
                     let ns = NSString::from_str(text);
                     let cg = to_cg_color(*color);
@@ -1467,7 +2904,8 @@ fn present_context_menu(tag: u64) {
                     let bounds: CGRect = msg_send![&*view, bounds];
                     let _: () = msg_send![pop, setSourceRect: bounds];
                 }
-                let _: () = msg_send![vc, presentViewController: ac, animated: true, completion: nil];
+                let _: () =
+                    msg_send![vc, presentViewController: ac, animated: true, completion: nil];
             }
         });
     }
@@ -1540,6 +2978,7 @@ impl Backend for UiKitBackend {
                     WidgetKind::Scroll => {
                         let sv: Retained<UIScrollView> =
                             unsafe { UIScrollView::initWithFrame(self.mtm.alloc(), zero) };
+                        self.install_scroll_delegate(id, &sv);
                         sv.into_super()
                     }
                     WidgetKind::ActivityIndicator => {
@@ -1632,6 +3071,7 @@ impl Backend for UiKitBackend {
                         // True UITableView-backed recycling is planned as future work.
                         let sv: Retained<UIScrollView> =
                             unsafe { UIScrollView::initWithFrame(self.mtm.alloc(), zero) };
+                        self.install_scroll_delegate(id, &sv);
                         sv.into_super()
                     }
                     WidgetKind::WebView => {
@@ -1651,18 +3091,19 @@ impl Backend for UiKitBackend {
                             }
                         }
                     }
-                    WidgetKind::MapView => {
-                        unsafe {
-                            let frame = CGRect {
-                                origin: CGPoint { x: 0.0, y: 0.0 },
-                                size: CGSize { width: 100.0, height: 100.0 },
-                            };
-                            let mv: *mut AnyObject = msg_send![class!(MKMapView), alloc];
-                            let mv: *mut AnyObject = msg_send![mv, initWithFrame: frame];
-                            let mv_view: *mut UIView = mv as *mut UIView;
-                            Retained::retain(mv_view).expect("MKMapView init failed")
-                        }
-                    }
+                    WidgetKind::MapView => unsafe {
+                        let frame = CGRect {
+                            origin: CGPoint { x: 0.0, y: 0.0 },
+                            size: CGSize {
+                                width: 100.0,
+                                height: 100.0,
+                            },
+                        };
+                        let mv: *mut AnyObject = msg_send![class!(MKMapView), alloc];
+                        let mv: *mut AnyObject = msg_send![mv, initWithFrame: frame];
+                        let mv_view: *mut UIView = mv as *mut UIView;
+                        Retained::retain(mv_view).expect("MKMapView init failed")
+                    },
                     WidgetKind::Canvas => {
                         // Plain UIView; the DrawList attribute populates its layer
                         // with CAShapeLayer/CALayer/CATextLayer content.
@@ -1740,9 +3181,7 @@ impl Backend for UiKitBackend {
                             // If the named font exists, use it; otherwise fall back to
                             // the system font at the same size so text is never invisible.
                             let font = unsafe { UIFont::fontWithName_size(&name, size) }
-                                .unwrap_or_else(|| unsafe {
-                                    UIFont::systemFontOfSize(size)
-                                });
+                                .unwrap_or_else(|| unsafe { UIFont::systemFontOfSize(size) });
                             unsafe { label.setFont(Some(&font)) };
                         }
                     }
@@ -1798,6 +3237,13 @@ impl Backend for UiKitBackend {
                                 .or_else(|| unsafe { UIImage::imageNamed(&ns) })
                             {
                                 unsafe { image_view.setImage(Some(&img)) };
+                                mark_image_loaded(id.to_u64());
+                            } else {
+                                unsafe { image_view.setImage(None) };
+                                mark_image_error(
+                                    id.to_u64(),
+                                    format!("image source not found: {name}"),
+                                );
                             }
                         }
                     }
@@ -1819,9 +3265,8 @@ impl Backend for UiKitBackend {
                     }
                     Attribute::DateValue(epoch_seconds) => {
                         if let Ok(dp) = view.clone().downcast::<UIDatePicker>() {
-                            let date = unsafe {
-                                NSDate::dateWithTimeIntervalSince1970(epoch_seconds)
-                            };
+                            let date =
+                                unsafe { NSDate::dateWithTimeIntervalSince1970(epoch_seconds) };
                             unsafe { dp.setDate(&date) };
                         }
                     }
@@ -1830,7 +3275,9 @@ impl Backend for UiKitBackend {
                             let mode = match mode {
                                 crate::dom::DatePickerMode::Date => UIDatePickerMode::Date,
                                 crate::dom::DatePickerMode::Time => UIDatePickerMode::Time,
-                                crate::dom::DatePickerMode::DateTime => UIDatePickerMode::DateAndTime,
+                                crate::dom::DatePickerMode::DateTime => {
+                                    UIDatePickerMode::DateAndTime
+                                }
                             };
                             unsafe { dp.setDatePickerMode(mode) };
                         }
@@ -1838,7 +3285,9 @@ impl Backend for UiKitBackend {
                     Attribute::DatePickerStyle(style) => {
                         if let Ok(dp) = view.clone().downcast::<UIDatePicker>() {
                             let style = match style {
-                                crate::dom::DatePickerStyle::Automatic => UIDatePickerStyle::Automatic,
+                                crate::dom::DatePickerStyle::Automatic => {
+                                    UIDatePickerStyle::Automatic
+                                }
                                 crate::dom::DatePickerStyle::Wheels => UIDatePickerStyle::Wheels,
                                 crate::dom::DatePickerStyle::Compact => UIDatePickerStyle::Compact,
                                 crate::dom::DatePickerStyle::Inline => UIDatePickerStyle::Inline,
@@ -1848,17 +3297,15 @@ impl Backend for UiKitBackend {
                     }
                     Attribute::DateMin(epoch_seconds) => {
                         if let Ok(dp) = view.clone().downcast::<UIDatePicker>() {
-                            let date = unsafe {
-                                NSDate::dateWithTimeIntervalSince1970(epoch_seconds)
-                            };
+                            let date =
+                                unsafe { NSDate::dateWithTimeIntervalSince1970(epoch_seconds) };
                             unsafe { dp.setMinimumDate(Some(&date)) };
                         }
                     }
                     Attribute::DateMax(epoch_seconds) => {
                         if let Ok(dp) = view.clone().downcast::<UIDatePicker>() {
-                            let date = unsafe {
-                                NSDate::dateWithTimeIntervalSince1970(epoch_seconds)
-                            };
+                            let date =
+                                unsafe { NSDate::dateWithTimeIntervalSince1970(epoch_seconds) };
                             unsafe { dp.setMaximumDate(Some(&date)) };
                         }
                     }
@@ -1992,6 +3439,10 @@ impl Backend for UiKitBackend {
                             };
                             if let Some(img) = unsafe { UIImage::imageWithData(&data) } {
                                 unsafe { image_view.setImage(Some(&img)) };
+                                mark_image_loaded(id.to_u64());
+                            } else {
+                                unsafe { image_view.setImage(None) };
+                                mark_image_error(id.to_u64(), "image data could not be decoded");
                             }
                         }
                     }
@@ -2001,20 +3452,20 @@ impl Backend for UiKitBackend {
                         //   Center = 4
                         let content_mode: isize = match mode {
                             crate::dom::ImageResizeMode::Stretch => 0,
-                            crate::dom::ImageResizeMode::Cover   => 1,
+                            crate::dom::ImageResizeMode::Cover => 1,
                             crate::dom::ImageResizeMode::Contain => 2,
-                            crate::dom::ImageResizeMode::Center  => 4,
-                            crate::dom::ImageResizeMode::Repeat  => 0, // stub; tiling needs CALayer
+                            crate::dom::ImageResizeMode::Center => 4,
+                            crate::dom::ImageResizeMode::Repeat => 0, // stub; tiling needs CALayer
                         };
                         unsafe {
                             let _: () = msg_send![&*view, setContentMode: content_mode];
                         }
                     }
-                    Attribute::ImageOnLoad(_cb) => {
-                        // TODO: wire up via network image observer pattern
+                    Attribute::ImageOnLoad(cb) => {
+                        set_image_on_load(id.to_u64(), cb);
                     }
-                    Attribute::ImageOnError(_cb) => {
-                        // TODO: wire up via network image observer pattern
+                    Attribute::ImageOnError(cb) => {
+                        set_image_on_error(id.to_u64(), cb);
                     }
                     Attribute::Horizontal(horiz) => {
                         if let Ok(sv) = view.clone().downcast::<UIScrollView>() {
@@ -2041,8 +3492,7 @@ impl Backend for UiKitBackend {
                                     let _: () = msg_send![new_rc, addTarget: &*self.action_target
                                                                   action: sel!(handleRefresh:)
                                                        forControlEvents: UIControlEvents::ValueChanged.bits()];
-                                    let _: () =
-                                        msg_send![new_rc, setTag: id.to_u64() as isize];
+                                    let _: () = msg_send![new_rc, setTag: id.to_u64() as isize];
                                     let _: () = msg_send![&*sv, setRefreshControl: new_rc];
                                 }
                                 let rc: *mut AnyObject = msg_send![&*sv, refreshControl];
@@ -2058,54 +3508,66 @@ impl Backend for UiKitBackend {
                     }
                     Attribute::ScrollEnabled(enabled) => {
                         if let Ok(sv) = view.clone().downcast::<UIScrollView>() {
-                            unsafe { let _: () = msg_send![&*sv, setScrollEnabled: enabled]; }
+                            unsafe {
+                                let _: () = msg_send![&*sv, setScrollEnabled: enabled];
+                            }
                         }
                     }
                     Attribute::ShowsScrollIndicator(show) => {
                         if let Ok(sv) = view.clone().downcast::<UIScrollView>() {
                             unsafe {
-                                let _: () = msg_send![&*sv, setShowsHorizontalScrollIndicator: show];
+                                let _: () =
+                                    msg_send![&*sv, setShowsHorizontalScrollIndicator: show];
                                 let _: () = msg_send![&*sv, setShowsVerticalScrollIndicator: show];
                             }
                         }
                     }
                     Attribute::PagingEnabled(enabled) => {
                         if let Ok(sv) = view.clone().downcast::<UIScrollView>() {
-                            unsafe { let _: () = msg_send![&*sv, setPagingEnabled: enabled]; }
-                        }
-                    }
-                    Attribute::ContentInset { top, right, bottom, left } => {
-                        if let Ok(sv) = view.clone().downcast::<UIScrollView>() {
                             unsafe {
-                                // UIEdgeInsets memory layout: {top, left, bottom, right} (all CGFloat / f64)
-                                let insets: [f64; 4] = [
-                                    top as f64,
-                                    left as f64,
-                                    bottom as f64,
-                                    right as f64,
-                                ];
-                                // TODO: call setContentInset: with UIEdgeInsets struct via objc2
-                                // when the binding stabilises. For now we record the values so
-                                // the attribute round-trips correctly through the mutation stream.
-                                let _ = (sv, insets);
+                                let _: () = msg_send![&*sv, setPagingEnabled: enabled];
                             }
                         }
                     }
-                    Attribute::OnScrollChange(_cb) => {
-                        // TODO: wire up UIScrollViewDelegate scrollViewDidScroll:
-                        // to call cb.call(ScrollInfo { offset_x, offset_y, velocity_x, velocity_y }).
-                        let _ = view;
+                    Attribute::ContentInset {
+                        top,
+                        right,
+                        bottom,
+                        left,
+                    } => {
+                        if let Ok(sv) = view.clone().downcast::<UIScrollView>() {
+                            let insets = UIEdgeInsets {
+                                top: top as f64,
+                                left: left as f64,
+                                bottom: bottom as f64,
+                                right: right as f64,
+                            };
+                            sv.setContentInset(insets);
+                        }
                     }
-                    Attribute::OnScrollBegin(_cb) => {
-                        // TODO: wire up UIScrollViewDelegate scrollViewWillBeginDragging:
-                        // to call cb.call().
-                        let _ = view;
+                    Attribute::OnScrollChange(cb) => {
+                        if let Ok(sv) = view.clone().downcast::<UIScrollView>() {
+                            self.install_scroll_delegate(id, &sv);
+                            update_scroll_handlers(id.to_u64(), |handlers| {
+                                handlers.on_scroll = Some(cb);
+                            });
+                        }
                     }
-                    Attribute::OnScrollEnd(_cb) => {
-                        // TODO: wire up UIScrollViewDelegate scrollViewDidEndDecelerating:
-                        // and scrollViewDidEndDragging:willDecelerate: (when not decelerating)
-                        // to call cb.call().
-                        let _ = view;
+                    Attribute::OnScrollBegin(cb) => {
+                        if let Ok(sv) = view.clone().downcast::<UIScrollView>() {
+                            self.install_scroll_delegate(id, &sv);
+                            update_scroll_handlers(id.to_u64(), |handlers| {
+                                handlers.on_begin = Some(cb);
+                            });
+                        }
+                    }
+                    Attribute::OnScrollEnd(cb) => {
+                        if let Ok(sv) = view.clone().downcast::<UIScrollView>() {
+                            self.install_scroll_delegate(id, &sv);
+                            update_scroll_handlers(id.to_u64(), |handlers| {
+                                handlers.on_end = Some(cb);
+                            });
+                        }
                     }
                     Attribute::KeyboardDismissMode(mode) => {
                         if let Ok(sv) = view.clone().downcast::<UIScrollView>() {
@@ -2144,10 +3606,8 @@ impl Backend for UiKitBackend {
                                 field.setSecureTextEntry(secure);
                                 if secure {
                                     // Install a native eye reveal toggle as the rightView.
-                                    let btn = UIButton::buttonWithType(
-                                        UIButtonType::System,
-                                        self.mtm,
-                                    );
+                                    let btn =
+                                        UIButton::buttonWithType(UIButtonType::System, self.mtm);
                                     let ns = NSString::from_str("eye.slash");
                                     if let Some(img) = UIImage::systemImageNamed(&ns) {
                                         let _: () =
@@ -2217,7 +3677,8 @@ impl Backend for UiKitBackend {
                                         msg_send![class!(UIFont), systemFontOfSize: font_size]
                                     };
                                     let font_key = NSString::from_str("NSFont");
-                                    let _: () = msg_send![attrs, setObject: font forKey: &*font_key];
+                                    let _: () =
+                                        msg_send![attrs, setObject: font forKey: &*font_key];
 
                                     // Color
                                     if let Some(c) = span.color {
@@ -2245,8 +3706,7 @@ impl Backend for UiKitBackend {
                                     // Letter spacing
                                     if let Some(kern) = span.letter_spacing {
                                         let kern_key = NSString::from_str("NSKern");
-                                        let kern_val: *mut AnyObject =
-                                            msg_send![class!(NSNumber), numberWithFloat: kern as f64];
+                                        let kern_val: *mut AnyObject = msg_send![class!(NSNumber), numberWithFloat: kern as f64];
                                         let _: () = msg_send![attrs, setObject: kern_val forKey: &*kern_key];
                                     }
 
@@ -2302,11 +3762,9 @@ impl Backend for UiKitBackend {
                             let _: () = msg_send![&*view, setAccessibilityHint: &*ns];
                         }
                     }
-                    Attribute::AccessibilityHidden(hidden) => {
-                        unsafe {
-                            let _: () = msg_send![&*view, setAccessibilityElementsHidden: hidden];
-                        }
-                    }
+                    Attribute::AccessibilityHidden(hidden) => unsafe {
+                        let _: () = msg_send![&*view, setAccessibilityElementsHidden: hidden];
+                    },
                     Attribute::Direction(dir) => {
                         // UISemanticContentAttribute:
                         //   UISemanticContentAttributeForceLeftToRight = 3
@@ -2319,23 +3777,21 @@ impl Backend for UiKitBackend {
                             let _: () = msg_send![&*view, setSemanticContentAttribute: val];
                         }
                     }
-                    Attribute::Url(url) => {
-                        unsafe {
-                            let ns_url_str = NSString::from_str(&url);
-                            let ns_url: *mut AnyObject = msg_send![class!(NSURL), URLWithString: &*ns_url_str];
-                            if !ns_url.is_null() {
-                                let request: *mut AnyObject = msg_send![class!(NSURLRequest), requestWithURL: ns_url];
-                                let _: () = msg_send![&*view, loadRequest: request];
-                            }
+                    Attribute::Url(url) => unsafe {
+                        let ns_url_str = NSString::from_str(&url);
+                        let ns_url: *mut AnyObject =
+                            msg_send![class!(NSURL), URLWithString: &*ns_url_str];
+                        if !ns_url.is_null() {
+                            let request: *mut AnyObject =
+                                msg_send![class!(NSURLRequest), requestWithURL: ns_url];
+                            let _: () = msg_send![&*view, loadRequest: request];
                         }
-                    }
-                    Attribute::Html(html) => {
-                        unsafe {
-                            let ns_html = NSString::from_str(&html);
-                            let base_url: *mut AnyObject = std::ptr::null_mut();
-                            let _: () = msg_send![&*view, loadHTMLString: &*ns_html baseURL: base_url];
-                        }
-                    }
+                    },
+                    Attribute::Html(html) => unsafe {
+                        let ns_html = NSString::from_str(&html);
+                        let base_url: *mut AnyObject = std::ptr::null_mut();
+                        let _: () = msg_send![&*view, loadHTMLString: &*ns_html baseURL: base_url];
+                    },
                     Attribute::TextStyle(style) => {
                         let style_name = match style {
                             crate::dom::TextStyle::LargeTitle => "UICTFontTextStyleLargeTitle",
@@ -2353,8 +3809,7 @@ impl Backend for UiKitBackend {
                         if let Ok(label) = view.clone().downcast::<UILabel>() {
                             unsafe {
                                 let ns_style = NSString::from_str(style_name);
-                                let font: *mut AnyObject =
-                                    msg_send![class!(UIFont), preferredFontForTextStyle: &*ns_style];
+                                let font: *mut AnyObject = msg_send![class!(UIFont), preferredFontForTextStyle: &*ns_style];
                                 if !font.is_null() {
                                     let _: () = msg_send![&*label, setFont: font];
                                     // Enable dynamic type scaling with the font metrics.
@@ -2382,72 +3837,98 @@ impl Backend for UiKitBackend {
                             }
                         });
                     }
-                    Attribute::MapCenter { latitude, longitude } => {
-                        unsafe {
-                            #[repr(C)]
-                            struct CLLocationCoordinate2D { latitude: f64, longitude: f64 }
-                            unsafe impl objc2::Encode for CLLocationCoordinate2D {
-                                const ENCODING: objc2::encode::Encoding =
-                                    objc2::encode::Encoding::Struct("CLLocationCoordinate2D", &[
-                                        f64::ENCODING, f64::ENCODING,
-                                    ]);
-                            }
-                            let coord = CLLocationCoordinate2D { latitude, longitude };
-                            let _: () = msg_send![&*view, setCenterCoordinate: coord animated: false];
+                    Attribute::MapCenter {
+                        latitude,
+                        longitude,
+                    } => unsafe {
+                        #[repr(C)]
+                        struct CLLocationCoordinate2D {
+                            latitude: f64,
+                            longitude: f64,
                         }
-                    }
-                    Attribute::MapSpan { lat_span, lon_span } => {
+                        unsafe impl objc2::Encode for CLLocationCoordinate2D {
+                            const ENCODING: objc2::encode::Encoding =
+                                objc2::encode::Encoding::Struct(
+                                    "CLLocationCoordinate2D",
+                                    &[f64::ENCODING, f64::ENCODING],
+                                );
+                        }
+                        let coord = CLLocationCoordinate2D {
+                            latitude,
+                            longitude,
+                        };
+                        let _: () = msg_send![&*view, setCenterCoordinate: coord animated: false];
+                    },
+                    Attribute::MapSpan { lat_span, lon_span } => unsafe {
+                        #[repr(C)]
+                        struct CLLocationCoordinate2D {
+                            latitude: f64,
+                            longitude: f64,
+                        }
+                        unsafe impl objc2::Encode for CLLocationCoordinate2D {
+                            const ENCODING: objc2::encode::Encoding =
+                                objc2::encode::Encoding::Struct(
+                                    "CLLocationCoordinate2D",
+                                    &[f64::ENCODING, f64::ENCODING],
+                                );
+                        }
+                        #[repr(C)]
+                        struct MKCoordinateSpan {
+                            latitude_delta: f64,
+                            longitude_delta: f64,
+                        }
+                        unsafe impl objc2::Encode for MKCoordinateSpan {
+                            const ENCODING: objc2::encode::Encoding =
+                                objc2::encode::Encoding::Struct(
+                                    "MKCoordinateSpan",
+                                    &[f64::ENCODING, f64::ENCODING],
+                                );
+                        }
+                        #[repr(C)]
+                        struct MKCoordinateRegion {
+                            center: CLLocationCoordinate2D,
+                            span: MKCoordinateSpan,
+                        }
+                        unsafe impl objc2::Encode for MKCoordinateRegion {
+                            const ENCODING: objc2::encode::Encoding =
+                                objc2::encode::Encoding::Struct(
+                                    "MKCoordinateRegion",
+                                    &[CLLocationCoordinate2D::ENCODING, MKCoordinateSpan::ENCODING],
+                                );
+                        }
+                        let center: CLLocationCoordinate2D = msg_send![&*view, centerCoordinate];
+                        let region = MKCoordinateRegion {
+                            center,
+                            span: MKCoordinateSpan {
+                                latitude_delta: lat_span,
+                                longitude_delta: lon_span,
+                            },
+                        };
+                        let _: () = msg_send![&*view, setRegion: region animated: false];
+                    },
+                    Attribute::MapAnnotation {
+                        annotation_id,
+                        latitude,
+                        longitude,
+                        title,
+                    } => {
                         unsafe {
                             #[repr(C)]
-                            struct CLLocationCoordinate2D { latitude: f64, longitude: f64 }
+                            struct CLLocationCoordinate2D {
+                                latitude: f64,
+                                longitude: f64,
+                            }
                             unsafe impl objc2::Encode for CLLocationCoordinate2D {
                                 const ENCODING: objc2::encode::Encoding =
-                                    objc2::encode::Encoding::Struct("CLLocationCoordinate2D", &[
-                                        f64::ENCODING, f64::ENCODING,
-                                    ]);
+                                    objc2::encode::Encoding::Struct(
+                                        "CLLocationCoordinate2D",
+                                        &[f64::ENCODING, f64::ENCODING],
+                                    );
                             }
-                            #[repr(C)]
-                            struct MKCoordinateSpan { latitude_delta: f64, longitude_delta: f64 }
-                            unsafe impl objc2::Encode for MKCoordinateSpan {
-                                const ENCODING: objc2::encode::Encoding =
-                                    objc2::encode::Encoding::Struct("MKCoordinateSpan", &[
-                                        f64::ENCODING, f64::ENCODING,
-                                    ]);
-                            }
-                            #[repr(C)]
-                            struct MKCoordinateRegion {
-                                center: CLLocationCoordinate2D,
-                                span: MKCoordinateSpan,
-                            }
-                            unsafe impl objc2::Encode for MKCoordinateRegion {
-                                const ENCODING: objc2::encode::Encoding =
-                                    objc2::encode::Encoding::Struct("MKCoordinateRegion", &[
-                                        CLLocationCoordinate2D::ENCODING,
-                                        MKCoordinateSpan::ENCODING,
-                                    ]);
-                            }
-                            let center: CLLocationCoordinate2D = msg_send![&*view, centerCoordinate];
-                            let region = MKCoordinateRegion {
-                                center,
-                                span: MKCoordinateSpan {
-                                    latitude_delta: lat_span,
-                                    longitude_delta: lon_span,
-                                },
+                            let coord = CLLocationCoordinate2D {
+                                latitude,
+                                longitude,
                             };
-                            let _: () = msg_send![&*view, setRegion: region animated: false];
-                        }
-                    }
-                    Attribute::MapAnnotation { annotation_id, latitude, longitude, title } => {
-                        unsafe {
-                            #[repr(C)]
-                            struct CLLocationCoordinate2D { latitude: f64, longitude: f64 }
-                            unsafe impl objc2::Encode for CLLocationCoordinate2D {
-                                const ENCODING: objc2::encode::Encoding =
-                                    objc2::encode::Encoding::Struct("CLLocationCoordinate2D", &[
-                                        f64::ENCODING, f64::ENCODING,
-                                    ]);
-                            }
-                            let coord = CLLocationCoordinate2D { latitude, longitude };
                             let pin: *mut AnyObject = msg_send![class!(MKPointAnnotation), new];
                             let _: () = msg_send![pin, setCoordinate: coord];
                             let _: () = msg_send![pin, setTitle: &*NSString::from_str(&title)];
@@ -2503,7 +3984,12 @@ impl Backend for UiKitBackend {
                             let _: () = msg_send![&*view, setAccessibilityTraits: new_traits];
                         }
                     }
-                    Attribute::HitSlop { top, right, bottom, left } => {
+                    Attribute::HitSlop {
+                        top,
+                        right,
+                        bottom,
+                        left,
+                    } => {
                         // UIView doesn't support hitSlop natively; we'd need a UIButton or a
                         // custom hit-test override. Store the values as associated object for
                         // subclasses to read via hitTest:withEvent:.
@@ -2574,8 +4060,7 @@ impl Backend for UiKitBackend {
                                 let attr_str: *mut AnyObject =
                                     msg_send![attr_str, initWithString: text_to_use];
 
-                                let para_key =
-                                    NSString::from_str("NSParagraphStyle");
+                                let para_key = NSString::from_str("NSParagraphStyle");
                                 let _: () = msg_send![attr_str,
                                     addAttribute: &*para_key
                                     value: para_style
@@ -2608,13 +4093,12 @@ impl Backend for UiKitBackend {
 
                                 // NSUnderlineStyleNone = 0, NSUnderlineStyleSingle = 1,
                                 // NSUnderlineStyleDouble = 9
-                                let (underline_style, strike_style): (i32, i32) =
-                                    match decoration {
-                                        TextDecoration::None => (0, 0),
-                                        TextDecoration::Underline => (1, 0),
-                                        TextDecoration::Strikethrough => (0, 1),
-                                        TextDecoration::UnderlineDouble => (9, 0),
-                                    };
+                                let (underline_style, strike_style): (i32, i32) = match decoration {
+                                    TextDecoration::None => (0, 0),
+                                    TextDecoration::Underline => (1, 0),
+                                    TextDecoration::Strikethrough => (0, 1),
+                                    TextDecoration::UnderlineDouble => (9, 0),
+                                };
 
                                 let underline_key = NSString::from_str("NSUnderline");
                                 let underline_val: *mut AnyObject =
@@ -2639,39 +4123,23 @@ impl Backend for UiKitBackend {
                         }
                     }
                     Attribute::OnPressIn(cb) => {
-                        // TODO: attach UIControl touchDown or a zero-duration long-press
-                        // recognizer to invoke the callback on touch-down. Stored as no-op
-                        // so the attribute round-trips without crash.
-                        let _ = cb;
+                        self.install_press_recognizer(id, &view);
+                        update_press_handlers(id.to_u64(), |handlers| {
+                            handlers.on_press_in = Some(cb);
+                        });
                     }
                     Attribute::OnPressOut(cb) => {
-                        // TODO: attach UIControl touchUpInside/touchUpOutside to invoke cb.
-                        let _ = cb;
+                        self.install_press_recognizer(id, &view);
+                        update_press_handlers(id.to_u64(), |handlers| {
+                            handlers.on_press_out = Some(cb);
+                        });
                     }
                     Attribute::Cursor(_style) => {
                         // Pointer cursor — no-op on touch-only iOS.
                     }
                     Attribute::OnSwipe { direction, handler } => {
-                        unsafe {
-                            view.setUserInteractionEnabled(true);
-                            // UISwipeGestureRecognizerDirection:
-                            //   Right = 1, Left = 2, Up = 4, Down = 8
-                            let dir_bits: usize = match direction {
-                                crate::dom::SwipeDirection::Right => 1,
-                                crate::dom::SwipeDirection::Left => 2,
-                                crate::dom::SwipeDirection::Up => 4,
-                                crate::dom::SwipeDirection::Down => 8,
-                            };
-                            let recognizer: *mut AnyObject =
-                                msg_send![class!(UISwipeGestureRecognizer), alloc];
-                            let recognizer: *mut AnyObject = msg_send![recognizer, init];
-                            let _: () = msg_send![recognizer, setDirection: dir_bits];
-                            // TODO: wire to ActionTarget so the callback fires on recognition.
-                            let _ = handler;
-                            view.addGestureRecognizer(
-                                &*(recognizer as *const UIGestureRecognizer),
-                            );
-                        }
+                        self.install_swipe_recognizer(id, &view, direction);
+                        set_swipe_handler(id.to_u64(), direction, handler);
                     }
                     Attribute::PlaceholderColor(color) => {
                         if let Ok(field) = view.clone().downcast::<UITextField>() {
@@ -2680,12 +4148,13 @@ impl Backend for UiKitBackend {
                                 // requested color, then assign it to attributedPlaceholder.
                                 let current_placeholder: *mut AnyObject =
                                     msg_send![&*field, placeholder];
-                                let placeholder_str: *mut AnyObject = if current_placeholder.is_null() {
-                                    let empty = NSString::from_str("");
-                                    &*empty as *const _ as *mut AnyObject
-                                } else {
-                                    current_placeholder
-                                };
+                                let placeholder_str: *mut AnyObject =
+                                    if current_placeholder.is_null() {
+                                        let empty = NSString::from_str("");
+                                        &*empty as *const _ as *mut AnyObject
+                                    } else {
+                                        current_placeholder
+                                    };
                                 let attrs: *mut AnyObject =
                                     msg_send![class!(NSMutableDictionary), new];
                                 let ui_color = to_ui_color(color);
@@ -2698,27 +4167,42 @@ impl Backend for UiKitBackend {
                                     initWithString: placeholder_str
                                     attributes: attrs
                                 ];
-                                let _: () =
-                                    msg_send![&*field, setAttributedPlaceholder: attr_str];
+                                let _: () = msg_send![&*field, setAttributedPlaceholder: attr_str];
                             }
                         }
                     }
                     Attribute::InputPrefix(text) => {
-                        // TODO: create a UILabel and set it as the field's leftView
-                        // with leftViewMode = UITextFieldViewModeAlways (raw value 1).
-                        let _ = text;
+                        if let Ok(field) = view.clone().downcast::<UITextField>() {
+                            if text.is_empty() {
+                                field.setLeftView(None);
+                                field.setLeftViewMode(UITextFieldViewMode::Never);
+                            } else {
+                                let accessory = self.text_field_accessory_view(&text);
+                                field.setLeftView(Some(&accessory));
+                                field.setLeftViewMode(UITextFieldViewMode::Always);
+                            }
+                        }
                     }
                     Attribute::InputSuffix(text) => {
-                        // TODO: create a UILabel and set it as the field's rightView.
-                        let _ = text;
+                        if let Ok(field) = view.clone().downcast::<UITextField>() {
+                            if text.is_empty() {
+                                field.setRightView(None);
+                                field.setRightViewMode(UITextFieldViewMode::Never);
+                            } else {
+                                let accessory = self.text_field_accessory_view(&text);
+                                field.setRightView(Some(&accessory));
+                                field.setRightViewMode(UITextFieldViewMode::Always);
+                            }
+                        }
                     }
                     Attribute::ClearButton(show) => {
                         if let Ok(field) = view.clone().downcast::<UITextField>() {
-                            unsafe {
-                                // UITextFieldViewModeWhileEditing = 1, UITextFieldViewModeNever = 0
-                                let mode: usize = if show { 1 } else { 0 };
-                                let _: () = msg_send![&*field, setClearButtonMode: mode];
-                            }
+                            let mode = if show {
+                                UITextFieldViewMode::WhileEditing
+                            } else {
+                                UITextFieldViewMode::Never
+                            };
+                            field.setClearButtonMode(mode);
                         }
                     }
                     Attribute::ReadOnly(read_only) => {
@@ -2733,12 +4217,18 @@ impl Backend for UiKitBackend {
                         }
                     }
                     Attribute::MaxLength(n) => {
-                        // TODO: implement via UITextFieldDelegate
-                        // textField:shouldChangeCharactersInRange:replacementString: — check
-                        // (current.count - range.length + replacement.count) <= n.
-                        let _ = n;
+                        if view.clone().downcast::<UITextField>().is_ok()
+                            || view.clone().downcast::<UITextView>().is_ok()
+                        {
+                            set_text_max_length(id.to_u64(), n);
+                        }
                     }
-                    Attribute::TextShadow { color, offset_x, offset_y, blur } => {
+                    Attribute::TextShadow {
+                        color,
+                        offset_x,
+                        offset_y,
+                        blur,
+                    } => {
                         // NSShadowAttributeName on UILabel's attributedText.
                         if let Ok(label) = view.clone().downcast::<UILabel>() {
                             unsafe {
@@ -2785,13 +4275,15 @@ impl Backend for UiKitBackend {
                         // This is a best-effort call; in apps that use per-VC preferred styles
                         // the view controller's `preferredStatusBarStyle` should be overridden.
                         unsafe {
-                            let app: *mut AnyObject = msg_send![class!(UIApplication), sharedApplication];
+                            let app: *mut AnyObject =
+                                msg_send![class!(UIApplication), sharedApplication];
                             let style_val: i64 = match style {
-                                crate::dom::StatusBarStyle::Dark => 3,  // UIStatusBarStyleDarkContent
+                                crate::dom::StatusBarStyle::Dark => 3, // UIStatusBarStyleDarkContent
                                 crate::dom::StatusBarStyle::Light => 1, // UIStatusBarStyleLightContent
                                 crate::dom::StatusBarStyle::Auto => 0,  // UIStatusBarStyleDefault
                             };
-                            let _: () = msg_send![app, setStatusBarStyle: style_val animated: false];
+                            let _: () =
+                                msg_send![app, setStatusBarStyle: style_val animated: false];
                         }
                     }
                     Attribute::AspectRatio(_ratio) => {
@@ -2801,12 +4293,7 @@ impl Backend for UiKitBackend {
                         // constraint-based layout path. For now this is a tracked no-op.
                     }
                     Attribute::BlurRadius(radius) => {
-                        // Apply a UIVisualEffectView blur overlay as a subview sized to
-                        // fill the parent. For now this is a tracked no-op — the radius
-                        // value is stored but not yet passed to UIBlurEffect.
-                        // TODO: create a UIVisualEffectView with UIBlurEffect(style: .regular)
-                        // and overlay it; scale opacity by radius/20.0.
-                        let _ = radius;
+                        self.apply_blur(id, &view, radius);
                     }
                     Attribute::ClipToBounds(clip) => {
                         // clipsToBounds hides subviews that extend outside the view's frame.
@@ -2824,11 +4311,9 @@ impl Backend for UiKitBackend {
                     Attribute::FlexOrder(_) => {
                         // Flex order is handled by the layout engine; no native view property needed.
                     }
-                    Attribute::UserSelectText(selectable) => {
-                        unsafe {
-                            let _: () = msg_send![&*view, setUserInteractionEnabled: selectable];
-                        }
-                    }
+                    Attribute::UserSelectText(selectable) => unsafe {
+                        let _: () = msg_send![&*view, setUserInteractionEnabled: selectable];
+                    },
                     Attribute::ParagraphSpacing(spacing) => {
                         // TODO: apply NSParagraphStyle paragraphSpacing to UILabel/UITextView
                         let _ = spacing;
@@ -2864,9 +4349,7 @@ impl Backend for UiKitBackend {
                         }
                     }
                     Attribute::AccessibilityActions(actions) => {
-                        // TODO: create UIAccessibilityCustomAction objects for each name
-                        // and set them via setAccessibilityCustomActions: on the view.
-                        let _ = actions;
+                        self.install_accessibility_actions(id, &view, actions);
                     }
                     Attribute::DynamicType(dt) => {
                         // adjustsFontForContentSizeCategory scales the font with Dynamic Type.
@@ -2899,8 +4382,8 @@ impl Backend for UiKitBackend {
                     }
                     // If this is a Camera view, resize the AVCaptureVideoPreviewLayer
                     // to match the new bounds so the feed fills the container.
-                    let has_session = QR_SESSIONS
-                        .with(|map| map.borrow().contains_key(&id.to_u64()));
+                    let has_session =
+                        QR_SESSIONS.with(|map| map.borrow().contains_key(&id.to_u64()));
                     if has_session {
                         unsafe {
                             // The preview layer is always the last sublayer added.
@@ -2923,6 +4406,7 @@ impl Backend for UiKitBackend {
                             }
                         }
                     }
+                    self.update_blur_frame(id, cg_rect);
                 }
                 // Keep any gradient sublayer filling the view's new bounds.
                 if let Some(layer) = self.gradient_layers.get(&id.to_u64()) {
@@ -2951,6 +4435,12 @@ impl Backend for UiKitBackend {
                 // Stop any QR scanner session tied to this widget before
                 // releasing the view so AVFoundation can clean up cleanly.
                 stop_qr_scanner(id.to_u64());
+                self.clear_scroll_delegate(id);
+                self.clear_interaction_recognizers(id);
+                clear_text_input_state(id.to_u64());
+                clear_image_handlers(id.to_u64());
+                self.clear_blur(id);
+                self.clear_accessibility_actions(id);
                 self.gradient_layers.remove(&id.to_u64());
                 if let Some(view) = self.views.remove(&id.to_u64()) {
                     view.removeFromSuperview();
@@ -2965,6 +4455,9 @@ impl Backend for UiKitBackend {
                 let Some(view) = self.view(id).cloned() else {
                     return;
                 };
+                if gesture == GestureKind::Swipe {
+                    return;
+                }
                 // Labels/images need interaction enabled to receive gestures.
                 unsafe { view.setUserInteractionEnabled(true) };
                 // Stamp the widget id onto the view's tag so `recognizer_tag`
@@ -2982,7 +4475,9 @@ impl Backend for UiKitBackend {
                                 Some(sel!(tapRecognized:)),
                             )
                         };
-                        unsafe { let _: () = msg_send![&*r, setDelegate: &*self.action_target]; }
+                        unsafe {
+                            let _: () = msg_send![&*r, setDelegate: &*self.action_target];
+                        }
                         r.into_super()
                     }
                     GestureKind::DoubleTap => {
@@ -2994,7 +4489,9 @@ impl Backend for UiKitBackend {
                             )
                         };
                         unsafe { r.setNumberOfTapsRequired(2) };
-                        unsafe { let _: () = msg_send![&*r, setDelegate: &*self.action_target]; }
+                        unsafe {
+                            let _: () = msg_send![&*r, setDelegate: &*self.action_target];
+                        }
                         r.into_super()
                     }
                     GestureKind::LongPress => {
@@ -3005,7 +4502,9 @@ impl Backend for UiKitBackend {
                                 Some(sel!(longPressRecognized:)),
                             )
                         };
-                        unsafe { let _: () = msg_send![&*r, setDelegate: &*self.action_target]; }
+                        unsafe {
+                            let _: () = msg_send![&*r, setDelegate: &*self.action_target];
+                        }
                         r.into_super()
                     }
                     GestureKind::Pan => {
@@ -3016,7 +4515,9 @@ impl Backend for UiKitBackend {
                                 Some(sel!(panRecognized:)),
                             )
                         };
-                        unsafe { let _: () = msg_send![&*r, setDelegate: &*self.action_target]; }
+                        unsafe {
+                            let _: () = msg_send![&*r, setDelegate: &*self.action_target];
+                        }
                         r.into_super()
                     }
                     GestureKind::Pinch => {
@@ -3027,7 +4528,9 @@ impl Backend for UiKitBackend {
                                 Some(sel!(pinchRecognized:)),
                             )
                         };
-                        unsafe { let _: () = msg_send![&*r, setDelegate: &*self.action_target]; }
+                        unsafe {
+                            let _: () = msg_send![&*r, setDelegate: &*self.action_target];
+                        }
                         r.into_super()
                     }
                     GestureKind::Rotate => {
@@ -3038,24 +4541,12 @@ impl Backend for UiKitBackend {
                                 Some(sel!(rotateRecognized:)),
                             )
                         };
-                        unsafe { let _: () = msg_send![&*r, setDelegate: &*self.action_target]; }
+                        unsafe {
+                            let _: () = msg_send![&*r, setDelegate: &*self.action_target];
+                        }
                         r.into_super()
                     }
-                    GestureKind::Swipe => {
-                        // Create a UISwipeGestureRecognizer via raw msg_send! (no direction
-                        // stored here — direction is set on the Attribute::OnSwipe arm which
-                        // creates its own recognizer). This arm satisfies the exhaustive match;
-                        // a default left-swipe recognizer is attached as a placeholder.
-                        // TODO: thread the SwipeDirection through GestureKind::Swipe.
-                        unsafe {
-                            let r: *mut AnyObject =
-                                msg_send![class!(UISwipeGestureRecognizer), alloc];
-                            let r: *mut AnyObject = msg_send![r, init];
-                            let r_view: *mut UIGestureRecognizer = r as *mut UIGestureRecognizer;
-                            Retained::retain(r_view)
-                                .expect("UISwipeGestureRecognizer init returned a valid object")
-                        }
-                    }
+                    GestureKind::Swipe => unreachable!("swipe gestures are installed from OnSwipe"),
                 };
                 unsafe { view.addGestureRecognizer(&recognizer) };
             }
@@ -3117,8 +4608,9 @@ impl Backend for UiKitBackend {
 
                     // Request authorization (sound | badge | alert = 0b111). Fire and forget.
                     // Pass null completion handler — we don't need the result.
-                    let null_auth: *const block2::Block<dyn Fn(objc2::runtime::Bool, *mut NSObject)> =
-                        std::ptr::null();
+                    let null_auth: *const block2::Block<
+                        dyn Fn(objc2::runtime::Bool, *mut NSObject),
+                    > = std::ptr::null();
                     let _: () = msg_send![
                         center,
                         requestAuthorizationWithOptions: 0b111usize
@@ -3151,8 +4643,7 @@ impl Backend for UiKitBackend {
                         trigger: trigger
                     ];
                     // Pass null completion handler — we don't need the result.
-                    let null_comp: *const block2::Block<dyn Fn(*mut NSObject)> =
-                        std::ptr::null();
+                    let null_comp: *const block2::Block<dyn Fn(*mut NSObject)> = std::ptr::null();
                     let _: () = msg_send![
                         center,
                         addNotificationRequest: request
@@ -3160,56 +4651,26 @@ impl Backend for UiKitBackend {
                     ];
                 }
             }
-            Mutation::CancelNotification { id } => {
-                unsafe {
-                    let center: *mut AnyObject =
-                        msg_send![class!(UNUserNotificationCenter), currentNotificationCenter];
-                    let ids = NSMutableArray::<NSString>::new();
-                    ids.addObject(&NSString::from_str(&id));
-                    let _: () = msg_send![
-                        center,
-                        removePendingNotificationRequestsWithIdentifiers: &*ids
-                    ];
-                }
+            Mutation::CancelNotification { id } => unsafe {
+                let center: *mut AnyObject =
+                    msg_send![class!(UNUserNotificationCenter), currentNotificationCenter];
+                let ids = NSMutableArray::<NSString>::new();
+                ids.addObject(&NSString::from_str(&id));
+                let _: () = msg_send![
+                    center,
+                    removePendingNotificationRequestsWithIdentifiers: &*ids
+                ];
+            },
+            Mutation::StartLocation | Mutation::RequestLocation => {
+                start_ios_location_updates();
             }
-            Mutation::StartLocation => {
-                unsafe {
-                    let mgr: *mut AnyObject = msg_send![class!(CLLocationManager), new];
-                    if mgr.is_null() {
-                        return;
-                    }
-                    let delegate: *mut AnyObject = msg_send![LocationDelegate::class(), new];
-                    let _: () = msg_send![mgr, setDelegate: delegate];
-                    // Request when-in-use authorization (matches typical app usage).
-                    let _: () = msg_send![mgr, requestWhenInUseAuthorization];
-                    // Start streaming location updates.
-                    let _: () = msg_send![mgr, startUpdatingLocation];
-                    // Store the manager so it stays alive. objc `new` gives +1 retain;
-                    // we take ownership here without an extra retain.
-                    LOCATION_MANAGER.with(|lm| {
-                        // Release any previous manager first.
-                        if let Some(old) = lm.borrow_mut().take() {
-                            let _: () = msg_send![old, stopUpdatingLocation];
-                            objc_release(old);
-                        }
-                        *lm.borrow_mut() = Some(mgr);
-                    });
-                    // The delegate was created with `new` (+1) — keep it alive via the
-                    // manager's delegate property (which retains it). Release our +1.
-                    objc_release(delegate);
-                }
+            Mutation::StopLocation | Mutation::StopLocationUpdates => {
+                stop_ios_location_updates();
             }
-            Mutation::StopLocation => {
-                LOCATION_MANAGER.with(|lm| {
-                    if let Some(mgr) = lm.borrow_mut().take() {
-                        unsafe {
-                            let _: () = msg_send![mgr, stopUpdatingLocation];
-                            objc_release(mgr);
-                        }
-                    }
-                });
-            }
-            Mutation::StartMotion { accelerometer, gyroscope } => {
+            Mutation::StartMotion {
+                accelerometer,
+                gyroscope,
+            } => {
                 unsafe {
                     let mgr: *mut AnyObject = msg_send![class!(CMMotionManager), new];
                     if mgr.is_null() {
@@ -3355,7 +4816,10 @@ impl Backend for UiKitBackend {
                     }
                 }
             }
-            Mutation::ScheduleBackgroundTask { identifier, earliest_seconds } => {
+            Mutation::ScheduleBackgroundTask {
+                identifier,
+                earliest_seconds,
+            } => {
                 unsafe {
                     let scheduler: *mut AnyObject =
                         msg_send![class!(BGTaskScheduler), sharedScheduler];
@@ -3364,13 +4828,11 @@ impl Backend for UiKitBackend {
                     }
                     // BGAppRefreshTaskRequest
                     let id_ns = NSString::from_str(&identifier);
-                    let req: *mut AnyObject =
-                        msg_send![class!(BGAppRefreshTaskRequest), alloc];
+                    let req: *mut AnyObject = msg_send![class!(BGAppRefreshTaskRequest), alloc];
                     if req.is_null() {
                         return;
                     }
-                    let req: *mut AnyObject =
-                        msg_send![req, initWithIdentifier: &*id_ns];
+                    let req: *mut AnyObject = msg_send![req, initWithIdentifier: &*id_ns];
                     if req.is_null() {
                         return;
                     }
@@ -3381,8 +4843,7 @@ impl Backend for UiKitBackend {
                     let _: () = msg_send![req, setEarliestBeginDate: date];
                     // Submit. Errors are silently ignored (common on simulator).
                     let mut err: *mut AnyObject = std::ptr::null_mut();
-                    let _: bool =
-                        msg_send![scheduler, submitTaskRequest: req error: &mut err];
+                    let _: bool = msg_send![scheduler, submitTaskRequest: req error: &mut err];
                 }
             }
             Mutation::AuthenticateBiometric { reason } => {
@@ -3391,8 +4852,7 @@ impl Backend for UiKitBackend {
                     // LAPolicyDeviceOwnerAuthenticationWithBiometrics = 1
                     let policy: isize = 1;
                     let mut err: *mut AnyObject = std::ptr::null_mut();
-                    let can: bool =
-                        msg_send![ctx, canEvaluatePolicy: policy error: &mut err];
+                    let can: bool = msg_send![ctx, canEvaluatePolicy: policy error: &mut err];
                     if !can {
                         PENDING_BIOMETRIC.with(|q| {
                             q.borrow_mut()
@@ -3405,8 +4865,8 @@ impl Backend for UiKitBackend {
                     // PENDING_BIOMETRIC so it is dispatched safely on the next tick.
                     // LAContext reply signature: (BOOL success, NSError * _Nullable error)
                     // objc2 represents ObjC BOOL as objc2::runtime::Bool.
-                    let reply = RcBlock::new(
-                        |success: objc2::runtime::Bool, error: *mut NSObject| {
+                    let reply =
+                        RcBlock::new(|success: objc2::runtime::Bool, error: *mut NSObject| {
                             let ok = success.as_bool();
                             let err_msg = if ok {
                                 None
@@ -3414,8 +4874,7 @@ impl Backend for UiKitBackend {
                                 Some("Authentication failed".to_string())
                             } else {
                                 // Pull localizedDescription from NSError.
-                                let desc: *mut AnyObject =
-                                    msg_send![error, localizedDescription];
+                                let desc: *mut AnyObject = msg_send![error, localizedDescription];
                                 if desc.is_null() {
                                     Some("Authentication failed".to_string())
                                 } else {
@@ -3423,10 +4882,8 @@ impl Backend for UiKitBackend {
                                     Some((*ns).to_string())
                                 }
                             };
-                            PENDING_BIOMETRIC
-                                .with(|q| q.borrow_mut().push((ok, err_msg)));
-                        },
-                    );
+                            PENDING_BIOMETRIC.with(|q| q.borrow_mut().push((ok, err_msg)));
+                        });
                     let _: () = msg_send![
                         ctx,
                         evaluatePolicy: policy
@@ -3435,11 +4892,16 @@ impl Backend for UiKitBackend {
                     ];
                 }
             }
+            Mutation::CheckPermission { permission } => {
+                check_ios_permission(permission);
+            }
+            Mutation::RequestPermission { permission } => {
+                request_ios_permission(permission);
+            }
             Mutation::SetClipboard { text } => {
                 // UIPasteboard.general.string = text
                 unsafe {
-                    let pb: *mut AnyObject =
-                        msg_send![class!(UIPasteboard), generalPasteboard];
+                    let pb: *mut AnyObject = msg_send![class!(UIPasteboard), generalPasteboard];
                     let ns = NSString::from_str(&text);
                     let _: () = msg_send![pb, setString: &*ns];
                 }
@@ -3451,8 +4913,7 @@ impl Backend for UiKitBackend {
                     // NSArray arrayWithObject: wraps a single item.
                     let items: *mut AnyObject =
                         msg_send![class!(NSArray), arrayWithObject: &*ns_text];
-                    let vc: *mut AnyObject =
-                        msg_send![class!(UIActivityViewController), alloc];
+                    let vc: *mut AnyObject = msg_send![class!(UIActivityViewController), alloc];
                     let vc: *mut AnyObject = msg_send![
                         vc,
                         initWithActivityItems: items
@@ -3472,18 +4933,14 @@ impl Backend for UiKitBackend {
                     });
                 }
             }
-            Mutation::OpenExternalUrl { url } => {
-                unsafe {
-                    let ns_url_str = NSString::from_str(&url);
-                    let ns_url: *mut AnyObject =
-                        msg_send![class!(NSURL), URLWithString: &*ns_url_str];
-                    if !ns_url.is_null() {
-                        let app: *mut AnyObject =
-                            msg_send![class!(UIApplication), sharedApplication];
-                        let _: bool = msg_send![app, openURL: ns_url];
-                    }
+            Mutation::OpenExternalUrl { url } => unsafe {
+                let ns_url_str = NSString::from_str(&url);
+                let ns_url: *mut AnyObject = msg_send![class!(NSURL), URLWithString: &*ns_url_str];
+                if !ns_url.is_null() {
+                    let app: *mut AnyObject = msg_send![class!(UIApplication), sharedApplication];
+                    let _: bool = msg_send![app, openURL: ns_url];
                 }
-            }
+            },
             Mutation::AnnounceAccessibility { message } => {
                 // UIAccessibilityAnnouncementNotification = 1008
                 // UIAccessibilityPostNotification(notification, argument)
@@ -3520,24 +4977,21 @@ impl Backend for UiKitBackend {
                     }
                 }
             }
-            Mutation::RequestLocation => {
-                // TODO: call [CLLocationManager startUpdatingLocation]
-            }
-            Mutation::StopLocationUpdates => {
-                // TODO: call [CLLocationManager stopUpdatingLocation]
-            }
             Mutation::SetTorch { on } => {
-                // TODO: set AVCaptureDevice torch mode
-                let _ = on;
+                set_ios_torch(on);
             }
             Mutation::RegisterForPushNotifications => {
-                // TODO: call [UIApplication registerForRemoteNotifications]
+                register_ios_remote_notifications();
             }
             Mutation::SetAppBadge { count } => {
-                // TODO: set [[UIApplication sharedApplication] applicationIconBadgeNumber]
-                let _ = count;
+                set_ios_app_badge(count);
             }
-            Mutation::ScrollTo { id, offset_x, offset_y, animated } => {
+            Mutation::ScrollTo {
+                id,
+                offset_x,
+                offset_y,
+                animated,
+            } => {
                 if let Some(view) = self.views.get(&id.to_u64()) {
                     if let Ok(sv) = view.clone().downcast::<UIScrollView>() {
                         unsafe {

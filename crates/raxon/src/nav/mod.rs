@@ -247,6 +247,11 @@ thread_local! {
     static BACK_HANDLERS: RefCell<Vec<Box<dyn Fn() -> bool>>> = RefCell::new(Vec::new());
 }
 
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+thread_local! {
+    static WEB_HISTORY_BOUND: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 // ---------------------------------------------------------------------------
 // Route guard
 // ---------------------------------------------------------------------------
@@ -309,21 +314,131 @@ pub fn current_route() -> Signal<String> {
     ensure_route_signal()
 }
 
+/// Parsed route information for app/internal URLs.
+///
+/// `path` is the normalized route path without query or fragment, `query`
+/// contains the first value for each query key, `query_all` keeps repeated
+/// query keys, and `fragment` contains the decoded hash fragment without `#`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RouteLocation {
+    /// Normalized route path without query or fragment.
+    pub path: String,
+    /// First value for each decoded query key.
+    pub query: HashMap<String, String>,
+    /// All decoded values for each decoded query key, preserving duplicate keys.
+    pub query_all: HashMap<String, Vec<String>>,
+    /// Decoded URL fragment without the leading `#`, when present.
+    pub fragment: Option<String>,
+}
+
+impl RouteLocation {
+    /// Returns the first decoded value for `key`, if present.
+    pub fn query_value(&self, key: &str) -> Option<&str> {
+        self.query.get(key).map(String::as_str)
+    }
+
+    /// Returns all decoded values for `key`, if present.
+    pub fn query_values(&self, key: &str) -> Option<&[String]> {
+        self.query_all.get(key).map(Vec::as_slice)
+    }
+}
+
+/// A successful declarative route match.
+///
+/// Passed to [`route`] renderers and returned by [`match_route_location`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RouteMatch {
+    /// The route pattern that matched, e.g. `"/orders/:id"`.
+    pub pattern: String,
+    /// Normalized path that matched the pattern, without query or fragment.
+    pub path: String,
+    /// Decoded `:param` values captured from the path.
+    pub params: HashMap<String, String>,
+    /// First decoded value for each query key.
+    pub query: HashMap<String, String>,
+    /// All decoded values for each query key, preserving duplicate keys.
+    pub query_all: HashMap<String, Vec<String>>,
+    /// Decoded URL fragment without the leading `#`, when present.
+    pub fragment: Option<String>,
+}
+
+impl RouteMatch {
+    /// Returns a decoded path parameter value, if present.
+    pub fn param(&self, key: &str) -> Option<&str> {
+        self.params.get(key).map(String::as_str)
+    }
+
+    /// Returns the first decoded query value for `key`, if present.
+    pub fn query_value(&self, key: &str) -> Option<&str> {
+        self.query.get(key).map(String::as_str)
+    }
+
+    /// Returns all decoded query values for `key`, if present.
+    pub fn query_values(&self, key: &str) -> Option<&[String]> {
+        self.query_all.get(key).map(Vec::as_slice)
+    }
+}
+
+/// A declarative URL route definition.
+///
+/// Build these with [`route`] and render them with [`url_routes`].
+pub struct UrlRoute {
+    pattern: String,
+    render: Box<dyn Fn(RouteMatch) -> BoxedView>,
+}
+
+impl UrlRoute {
+    /// Returns the route pattern for this definition.
+    pub fn pattern(&self) -> &str {
+        &self.pattern
+    }
+
+    /// Matches this definition against `route`, returning captured route state.
+    pub fn matches(&self, route: &str) -> Option<RouteMatch> {
+        match_route_location(&self.pattern, route)
+    }
+}
+
+/// Creates a declarative URL route.
+///
+/// `pattern` supports static path segments and `:param` captures. Query keys
+/// and fragments in the pattern act as constraints, so `"/orders/:id?tab=items"`
+/// only matches routes whose first `tab` query value is `"items"`.
+///
+/// # Example
+/// ```
+/// use raxon::nav::route;
+/// use raxon::view::{boxed, text};
+///
+/// let detail = route("/orders/:id", |m| {
+///     boxed(text(format!("Order {}", m.param("id").unwrap_or(""))))
+/// });
+/// assert_eq!(detail.pattern(), "/orders/:id");
+/// ```
+pub fn route(
+    pattern: impl Into<String>,
+    render: impl Fn(RouteMatch) -> BoxedView + 'static,
+) -> UrlRoute {
+    UrlRoute {
+        pattern: pattern.into(),
+        render: Box::new(render),
+    }
+}
+
 /// Navigate to `route`, checking guards first. Fires navigation listeners.
 /// Returns the route that was actually navigated to (may differ if a guard
 /// redirected).
 pub fn navigate(route: &str) -> String {
-    let destination = check_guards(route)
-        .unwrap_or_else(|| route.to_string());
+    let destination = check_guards(route).unwrap_or_else(|| route.to_string());
 
-    let from = HISTORY_STACK.with(|s| {
-        s.borrow().last().cloned().unwrap_or_default()
-    });
+    let from = HISTORY_STACK.with(|s| s.borrow().last().cloned().unwrap_or_default());
 
     HISTORY_STACK.with(|s| s.borrow_mut().push(destination.clone()));
 
     let sig = ensure_route_signal();
     sig.set(destination.clone());
+
+    crate::web::push_path(&destination);
 
     fire_navigate_event(&from, &destination);
 
@@ -343,11 +458,10 @@ pub fn go_back() -> bool {
     });
 
     if popped {
-        let prev = HISTORY_STACK.with(|s| {
-            s.borrow().last().cloned().unwrap_or_default()
-        });
+        let prev = HISTORY_STACK.with(|s| s.borrow().last().cloned().unwrap_or_default());
         let sig = ensure_route_signal();
-        sig.set(prev);
+        sig.set(prev.clone());
+        crate::web::replace_path(&prev);
     }
 
     popped
@@ -367,16 +481,70 @@ pub fn can_go_back() -> bool {
 pub fn use_params() -> HashMap<String, String> {
     let route = ensure_route_signal();
     let current = route.with(|r| r.clone());
+    let location = parse_route_location(&current);
 
     // Try to find params from the current route by attempting common patterns.
     // In a real app the patterns would be registered; here we return the
     // path segments as positional keys if no explicit match is found.
     // (Callers should use match_route directly for pattern-specific params.)
     let mut params = HashMap::new();
-    for (i, segment) in current.split('/').filter(|s| !s.is_empty()).enumerate() {
-        params.insert(format!("segment_{i}"), segment.to_string());
+    for (i, segment) in location
+        .path
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .enumerate()
+    {
+        params.insert(format!("segment_{i}"), decode_url_component(segment, false));
     }
     params
+}
+
+/// Returns the parsed current route, including path, query params, and fragment.
+pub fn current_route_location() -> RouteLocation {
+    let route = ensure_route_signal();
+    route.with(|r| parse_route_location(r))
+}
+
+/// Returns decoded query parameters for the current route.
+///
+/// When a key appears multiple times, the first value is returned here. Use
+/// [`current_route_location`] to access `query_all` for repeated values.
+pub fn use_query_params() -> HashMap<String, String> {
+    current_route_location().query
+}
+
+/// Renders the first declarative URL route that matches [`current_route`].
+///
+/// Use this for web/deep-link-addressable screen shells. On web, call
+/// [`bind_web_history`] once during app startup to initialize the route from the
+/// browser URL and keep back/forward navigation in sync.
+///
+/// # Example
+/// ```
+/// use raxon::nav::{route, url_routes};
+/// use raxon::view::{boxed, text};
+///
+/// let view = url_routes(vec![
+///     route("/", |_| boxed(text("home"))),
+///     route("/orders/:id", |m| {
+///         boxed(text(format!("order {}", m.param("id").unwrap_or(""))))
+///     }),
+/// ]);
+/// ```
+pub fn url_routes(routes: Vec<UrlRoute>) -> impl View {
+    dynamic(move || {
+        let location = current_route_location();
+        for route in &routes {
+            if let Some(route_match) = match_route_definition(&route.pattern, location.clone()) {
+                return (route.render)(route_match);
+            }
+        }
+
+        get_not_found().unwrap_or_else(|| {
+            use crate::view::{boxed, text};
+            boxed(text(format!("Route not found: {}", location.path)))
+        })
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -393,9 +561,7 @@ pub fn set_not_found(handler: impl Fn() -> BoxedView + 'static) {
 /// Invoke the not-found handler, returning its view, or `None` if no handler
 /// has been registered.
 pub fn get_not_found() -> Option<BoxedView> {
-    NOT_FOUND_HANDLER.with(|h| {
-        h.borrow().as_ref().map(|f| f())
-    })
+    NOT_FOUND_HANDLER.with(|h| h.borrow().as_ref().map(|f| f()))
 }
 
 // ---------------------------------------------------------------------------
@@ -466,8 +632,45 @@ pub fn handle_back() -> bool {
 /// assert_eq!(params["postId"], "7");
 /// ```
 pub fn match_route(pattern: &str, route: &str) -> Option<HashMap<String, String>> {
-    let pattern_segs: Vec<&str> = pattern.split('/').filter(|s| !s.is_empty()).collect();
-    let route_segs: Vec<&str> = route.split('/').filter(|s| !s.is_empty()).collect();
+    let pattern_location = parse_route_location(pattern);
+    let route_location = parse_route_location(route);
+    match_path_params(&pattern_location.path, &route_location.path)
+}
+
+/// Match a declarative route pattern against a route/URL and return all route
+/// state needed by a screen renderer.
+pub fn match_route_location(pattern: &str, route: &str) -> Option<RouteMatch> {
+    let location = parse_route_location(route);
+    match_route_definition(pattern, location)
+}
+
+fn match_route_definition(pattern: &str, location: RouteLocation) -> Option<RouteMatch> {
+    let pattern_location = parse_route_location(pattern);
+    let params = match_path_params(&pattern_location.path, &location.path)?;
+
+    if !query_constraints_match(&pattern_location.query, &location.query) {
+        return None;
+    }
+
+    if let Some(pattern_fragment) = pattern_location.fragment.as_deref() {
+        if location.fragment.as_deref() != Some(pattern_fragment) {
+            return None;
+        }
+    }
+
+    Some(RouteMatch {
+        pattern: pattern.to_string(),
+        path: location.path,
+        params,
+        query: location.query,
+        query_all: location.query_all,
+        fragment: location.fragment,
+    })
+}
+
+fn match_path_params(pattern_path: &str, route_path: &str) -> Option<HashMap<String, String>> {
+    let pattern_segs: Vec<&str> = pattern_path.split('/').filter(|s| !s.is_empty()).collect();
+    let route_segs: Vec<&str> = route_path.split('/').filter(|s| !s.is_empty()).collect();
 
     if pattern_segs.len() != route_segs.len() {
         return None;
@@ -476,13 +679,25 @@ pub fn match_route(pattern: &str, route: &str) -> Option<HashMap<String, String>
     let mut params = HashMap::new();
     for (p, r) in pattern_segs.iter().zip(route_segs.iter()) {
         if let Some(param_name) = p.strip_prefix(':') {
-            params.insert(param_name.to_string(), r.to_string());
-        } else if p != r {
+            if param_name.is_empty() {
+                return None;
+            }
+            params.insert(param_name.to_string(), decode_url_component(r, false));
+        } else if decode_url_component(p, false) != decode_url_component(r, false) {
             return None;
         }
     }
 
     Some(params)
+}
+
+fn query_constraints_match(
+    pattern_query: &HashMap<String, String>,
+    route_query: &HashMap<String, String>,
+) -> bool {
+    pattern_query
+        .iter()
+        .all(|(key, value)| route_query.get(key) == Some(value))
 }
 
 // ---------------------------------------------------------------------------
@@ -516,7 +731,9 @@ pub fn present_modal(route: &str) {
 pub fn dismiss_modal() -> bool {
     MODAL_STACK.with(|s| {
         let mut stack = s.borrow_mut();
-        if stack.is_empty() { return false; }
+        if stack.is_empty() {
+            return false;
+        }
         stack.pop();
         true
     })
@@ -549,26 +766,231 @@ pub fn modal_stack() -> Vec<String> {
 /// assert_eq!(params["tab"], "posts");
 /// ```
 pub fn parse_deep_link(url: &str) -> (String, HashMap<String, String>) {
-    let path_part = if let Some(idx) = url.find("://") {
-        &url[idx + 3..]
+    let location = parse_route_location(url);
+    (location.path, location.query)
+}
+
+/// Parses a route, relative URL, absolute web URL, custom-scheme deep link, or
+/// hash route into path/query/fragment pieces.
+///
+/// Supported forms include `/orders/42?tab=items#notes`,
+/// `https://example.com/orders/42?tab=items`, `pablo://orders/42?tab=items`,
+/// and hash-router URLs such as `https://example.com/#/orders/42?tab=items`.
+pub fn parse_route_location(input: &str) -> RouteLocation {
+    let trimmed = input.trim();
+    let (without_fragment, fragment_raw) = split_once(trimmed, '#');
+    let fragment = fragment_raw
+        .filter(|value| !value.is_empty())
+        .map(|value| decode_url_component(value, false));
+
+    if let Some(hash_route) = fragment_raw.and_then(hash_route_part) {
+        let mut location = parse_route_location(hash_route);
+        location.fragment = fragment;
+        return location;
+    }
+
+    let route_part = strip_url_prefix(without_fragment);
+    let (raw_path, query_raw) = split_once(route_part, '?');
+    let path = normalize_route_path(raw_path);
+    let query_all = parse_query_all(query_raw.unwrap_or_default());
+    let query = first_query_values(&query_all);
+
+    RouteLocation {
+        path,
+        query,
+        query_all,
+        fragment,
+    }
+}
+
+/// Parses a query string into decoded first values.
+///
+/// Accepts strings with or without a leading `?`. Repeated keys keep the first
+/// value, matching browser `URLSearchParams.get` behavior.
+pub fn parse_query(query: &str) -> HashMap<String, String> {
+    first_query_values(&parse_query_all(query))
+}
+
+/// Parses a query string into decoded repeated values.
+///
+/// Accepts strings with or without a leading `?`; keys without `=` map to an
+/// empty string value.
+pub fn parse_query_all(query: &str) -> HashMap<String, Vec<String>> {
+    let query = query.trim_start_matches('?');
+    let mut params: HashMap<String, Vec<String>> = HashMap::new();
+
+    for pair in query.split(['&', ';']).filter(|part| !part.is_empty()) {
+        let (key, value) = split_once(pair, '=');
+        let key = decode_url_component(key, true);
+        if key.is_empty() {
+            continue;
+        }
+        let value = decode_url_component(value.unwrap_or_default(), true);
+        params.entry(key).or_default().push(value);
+    }
+
+    params
+}
+
+fn first_query_values(query_all: &HashMap<String, Vec<String>>) -> HashMap<String, String> {
+    query_all
+        .iter()
+        .filter_map(|(key, values)| values.first().map(|value| (key.clone(), value.clone())))
+        .collect()
+}
+
+fn split_once(input: &str, needle: char) -> (&str, Option<&str>) {
+    if let Some(index) = input.find(needle) {
+        (&input[..index], Some(&input[index + needle.len_utf8()..]))
     } else {
-        url
+        (input, None)
+    }
+}
+
+fn hash_route_part(fragment: &str) -> Option<&str> {
+    let route = fragment.strip_prefix('!').unwrap_or(fragment);
+    route.starts_with('/').then_some(route)
+}
+
+fn strip_url_prefix(input: &str) -> &str {
+    if let Some(rest) = input.strip_prefix("//") {
+        return strip_authority(rest);
+    }
+
+    let Some(scheme_index) = input.find(':') else {
+        return input;
     };
-    let (raw_path, query) = if let Some(q) = path_part.find('?') {
-        (&path_part[..q], &path_part[q + 1..])
+    let scheme = &input[..scheme_index];
+    if !scheme
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+    {
+        return input;
+    }
+
+    let rest = &input[scheme_index + 1..];
+    if let Some(rest) = rest.strip_prefix("//") {
+        if scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https") {
+            strip_authority(rest)
+        } else {
+            rest
+        }
     } else {
-        (path_part, "")
+        rest
+    }
+}
+
+fn strip_authority(input: &str) -> &str {
+    let end = input.find(['/', '?']).unwrap_or(input.len());
+    &input[end..]
+}
+
+fn normalize_route_path(path: &str) -> String {
+    let path = path.trim();
+    if path.is_empty() {
+        return "/".to_string();
+    }
+    let with_leading = if path.starts_with('/') {
+        path.to_string()
+    } else {
+        format!("/{path}")
     };
-    let path = format!("/{}", raw_path.trim_matches('/'));
-    let params: HashMap<String, String> = query
-        .split('&')
-        .filter(|s| !s.is_empty())
-        .filter_map(|pair| {
-            let mut parts = pair.splitn(2, '=');
-            Some((parts.next()?.to_string(), parts.next().unwrap_or("").to_string()))
-        })
-        .collect();
-    (path, params)
+    if with_leading.len() > 1 {
+        with_leading.trim_end_matches('/').to_string()
+    } else {
+        with_leading
+    }
+}
+
+fn decode_url_component(input: &str, plus_as_space: bool) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+
+    while index < bytes.len() {
+        match bytes[index] {
+            b'%' if index + 2 < bytes.len() => {
+                if let (Some(high), Some(low)) =
+                    (hex_value(bytes[index + 1]), hex_value(bytes[index + 2]))
+                {
+                    out.push((high << 4) | low);
+                    index += 3;
+                    continue;
+                }
+                out.push(bytes[index]);
+                index += 1;
+            }
+            b'+' if plus_as_space => {
+                out.push(b' ');
+                index += 1;
+            }
+            byte => {
+                out.push(byte);
+                index += 1;
+            }
+        }
+    }
+
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+/// Binds the string router to browser history on the web target.
+///
+/// On web, this initializes the current route from `window.location`, listens
+/// for browser back/forward navigation, and keeps guarded redirects reflected
+/// in the address bar. It is a no-op on native targets.
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+pub fn bind_web_history() {
+    let already_bound = WEB_HISTORY_BOUND.with(|bound| {
+        let was_bound = bound.get();
+        bound.set(true);
+        was_bound
+    });
+    if already_bound {
+        return;
+    }
+
+    replace_route_from_browser(&crate::web::location_route());
+    crate::web::on_popstate(|route| replace_route_from_browser(&route));
+}
+
+/// Binds the string router to browser history on the web target.
+///
+/// This is a no-op on native targets.
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+pub fn bind_web_history() {}
+
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+fn replace_route_from_browser(route: &str) {
+    let destination = check_guards(route).unwrap_or_else(|| route.to_string());
+    let from = HISTORY_STACK.with(|s| {
+        let mut stack = s.borrow_mut();
+        let from = stack.last().cloned().unwrap_or_default();
+        if stack.is_empty() {
+            stack.push(destination.clone());
+        } else if let Some(current) = stack.last_mut() {
+            *current = destination.clone();
+        }
+        from
+    });
+
+    let sig = ensure_route_signal();
+    sig.set(destination.clone());
+
+    if destination != route {
+        crate::web::replace_path(&destination);
+    }
+
+    fire_navigate_event(&from, &destination);
 }
 
 // ---------------------------------------------------------------------------
@@ -620,9 +1042,9 @@ where
     F: FnMut(R) -> BoxedView + 'static,
 {
     use crate::anim::{animate, Easing};
+    use crate::dom::Transform;
     use crate::reactive::{create_effect, create_signal};
     use crate::view::{boxed, column, dynamic, ViewExt};
-    use crate::dom::Transform;
 
     // Generation counter: bumps each time the stack changes; used inside
     // `dynamic` to force a new screen to be built and its enter anim started.
@@ -654,9 +1076,7 @@ where
                 boxed(
                     column((screen,))
                         .grow()
-                        .transform_fn(move || {
-                            Transform::IDENTITY.translate(offset.get(), 0.0)
-                        }),
+                        .transform_fn(move || Transform::IDENTITY.translate(offset.get(), 0.0)),
                 )
             }
 
@@ -666,12 +1086,111 @@ where
                 let anim = animate(0.0, 1.0, 0.25, Easing::EaseOut);
                 create_effect(move || opacity.set(anim.get()));
 
-                boxed(
-                    column((screen,))
-                        .grow()
-                        .opacity_fn(move || opacity.get()),
-                )
+                boxed(column((screen,)).grow().opacity_fn(move || opacity.get()))
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        match_route, match_route_location, parse_deep_link, parse_query, parse_query_all,
+        parse_route_location, route,
+    };
+
+    #[test]
+    fn parses_query_strings_with_decoding_and_repeated_keys() {
+        let first = parse_query("?tab=reviews&filter=open&filter=closed&empty&name=Alice+Doe");
+
+        assert_eq!(first["tab"], "reviews");
+        assert_eq!(first["filter"], "open");
+        assert_eq!(first["empty"], "");
+        assert_eq!(first["name"], "Alice Doe");
+
+        let all = parse_query_all("filter=open&filter=closed&encoded=a%2Fb");
+        assert_eq!(
+            all["filter"],
+            vec!["open".to_string(), "closed".to_string()]
+        );
+        assert_eq!(all["encoded"], vec!["a/b".to_string()]);
+    }
+
+    #[test]
+    fn parses_web_custom_and_hash_route_locations() {
+        let web = parse_route_location("https://rtylr.com/products/42?tab=reviews#notes");
+        assert_eq!(web.path, "/products/42");
+        assert_eq!(web.query["tab"], "reviews");
+        assert_eq!(web.fragment.as_deref(), Some("notes"));
+
+        let custom = parse_route_location("pablo://orders/abc%20123?from=push");
+        assert_eq!(custom.path, "/orders/abc%20123");
+        assert_eq!(custom.query["from"], "push");
+
+        let hash = parse_route_location("https://rtylr.com/#/checkout?step=pay");
+        assert_eq!(hash.path, "/checkout");
+        assert_eq!(hash.query["step"], "pay");
+        assert_eq!(hash.fragment.as_deref(), Some("/checkout?step=pay"));
+    }
+
+    #[test]
+    fn match_route_ignores_query_hash_and_decodes_params() {
+        let params = match_route(
+            "/products/:id/reviews/:review_id",
+            "/products/abc%20123/reviews/99?sort=new#top",
+        )
+        .expect("route should match");
+
+        assert_eq!(params["id"], "abc 123");
+        assert_eq!(params["review_id"], "99");
+    }
+
+    #[test]
+    fn match_route_location_carries_params_query_and_hash() {
+        let matched = match_route_location(
+            "/orders/:id?tab=items#notes",
+            "/orders/abc%20123?tab=items&tag=paid&tag=pickup#notes",
+        )
+        .expect("route should match");
+
+        assert_eq!(matched.pattern, "/orders/:id?tab=items#notes");
+        assert_eq!(matched.path, "/orders/abc%20123");
+        assert_eq!(matched.param("id"), Some("abc 123"));
+        assert_eq!(matched.query_value("tab"), Some("items"));
+        assert_eq!(
+            matched.query_values("tag"),
+            Some(["paid".to_string(), "pickup".to_string()].as_slice())
+        );
+        assert_eq!(matched.fragment.as_deref(), Some("notes"));
+    }
+
+    #[test]
+    fn declarative_route_patterns_can_constrain_query_and_hash() {
+        assert!(match_route_location("/orders/:id?tab=items", "/orders/42?tab=items").is_some());
+        assert!(match_route_location("/orders/:id?tab=items", "/orders/42?tab=history").is_none());
+        assert!(match_route_location("/orders/:id#notes", "/orders/42#notes").is_some());
+        assert!(match_route_location("/orders/:id#notes", "/orders/42#summary").is_none());
+    }
+
+    #[test]
+    fn url_route_matches_exposes_the_route_context() {
+        let detail = route("/orders/:id", |_| {
+            crate::view::boxed(crate::view::text("detail"))
+        });
+        let matched = detail
+            .matches("/orders/42?tab=items")
+            .expect("route should match");
+
+        assert_eq!(detail.pattern(), "/orders/:id");
+        assert_eq!(matched.param("id"), Some("42"));
+        assert_eq!(matched.query_value("tab"), Some("items"));
+    }
+
+    #[test]
+    fn parse_deep_link_handles_universal_links() {
+        let (path, params) = parse_deep_link("https://rtylr.com/profile/42?tab=posts");
+
+        assert_eq!(path, "/profile/42");
+        assert_eq!(params["tab"], "posts");
+    }
 }

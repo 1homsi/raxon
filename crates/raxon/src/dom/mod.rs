@@ -33,13 +33,14 @@ mod tree;
 
 pub use backend::{Backend, Host, RecordingBackend};
 pub use event::{
-    Event, EventKind, EventSink, GesturePhase, Lifecycle, PointerId, TextSelection,
+    Event, EventKind, EventSink, GesturePhase, Lifecycle, NetworkStatus, PointerId, TextSelection,
 };
 pub use mutation::{
     Attribute, Callback, CursorStyle, DatePickerMode, DatePickerStyle, DrawCmd, FontStyle,
     GestureKind, HapticStyle, ImageErrorCallback, ImageLoadCallback, ImageResizeMode,
-    KeyboardDismissMode, KeyboardType, LayoutDirection, LinearGradient, LocalNotification, MenuItem,
-    Mutation, ReturnKeyType, Role, ScrollCallback, ScrollInfo, Shadow, StatusBarStyle, Stroke,
-    SwipeDirection, TextAlign, TextDecoration, TextSpan, TextStyle, Transform, WidgetId, WidgetKind,
+    KeyboardDismissMode, KeyboardType, LayoutDirection, LinearGradient, LocalNotification,
+    MenuItem, Mutation, PermissionKind, PermissionStatus, ReturnKeyType, Role, ScrollCallback,
+    ScrollInfo, Shadow, StatusBarStyle, Stroke, SwipeDirection, TextAlign, TextDecoration,
+    TextSpan, TextStyle, Transform, WidgetId, WidgetKind,
 };
 pub use tree::{BuildThunk, Tree};

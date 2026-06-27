@@ -1041,7 +1041,8 @@ pub fn current_route() -> Signal<String> {
 /// `path` is the normalized route path without query or fragment, `query`
 /// contains the first value for each query key, `query_all` keeps repeated
 /// query keys, and `fragment` contains the decoded hash fragment without `#`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RouteLocation {
     /// Normalized route path without query or fragment.
     pub path: String,
@@ -1136,7 +1137,8 @@ pub struct NavigationState {
 }
 
 /// Debug/introspection snapshot for the string router.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NavigationDebugSnapshot {
     /// Current route at the top of the string-router stack.
     pub current: String,
@@ -1636,6 +1638,23 @@ pub fn navigation_debug_snapshot() -> NavigationDebugSnapshot {
         pending_result_type,
         pending_result_count,
     }
+}
+
+/// Serializes a navigation debug snapshot as host/devtools-friendly JSON.
+pub fn encode_navigation_debug_snapshot(
+    snapshot: &NavigationDebugSnapshot,
+) -> Result<String, String> {
+    serde_json::to_string(snapshot).map_err(|err| err.to_string())
+}
+
+/// Parses a navigation debug snapshot from JSON.
+pub fn decode_navigation_debug_snapshot(json: &str) -> Result<NavigationDebugSnapshot, String> {
+    serde_json::from_str(json).map_err(|err| err.to_string())
+}
+
+/// Captures and serializes the current navigation debug snapshot.
+pub fn navigation_debug_snapshot_json() -> Result<String, String> {
+    encode_navigation_debug_snapshot(&navigation_debug_snapshot())
 }
 
 /// Restores string-router history and modal stack from a snapshot.
@@ -2879,11 +2898,12 @@ mod tests {
         apply_navigation_command, apply_navigation_command_json, apply_navigation_commands,
         build_route, build_route_with_query, cancel_route_result, create_navigator,
         create_tab_stack_navigator, current_route, decode_navigation_command,
-        decode_navigation_commands, decode_navigation_state, encode_navigation_command,
-        encode_navigation_state, has_pending_route_result, match_route, match_route_location,
-        modal_stack, navigate, navigate_for_result, navigation_debug_snapshot, navigation_state,
-        on_appear, on_disappear, on_navigate, on_transition_complete, on_transition_start,
-        parse_deep_link, parse_query, parse_query_all, parse_route_location,
+        decode_navigation_commands, decode_navigation_debug_snapshot, decode_navigation_state,
+        encode_navigation_command, encode_navigation_debug_snapshot, encode_navigation_state,
+        has_pending_route_result, match_route, match_route_location, modal_stack, navigate,
+        navigate_for_result, navigation_debug_snapshot, navigation_debug_snapshot_json,
+        navigation_state, on_appear, on_disappear, on_navigate, on_transition_complete,
+        on_transition_start, parse_deep_link, parse_query, parse_query_all, parse_route_location,
         pending_route_result_route, pending_route_result_type, present_modal, remove_fragment,
         replace_fragment, replace_remove_fragment, replace_route, reset_route,
         restore_navigation_state, restore_saved_navigation_state, return_route_result, route,
@@ -3696,6 +3716,53 @@ mod tests {
             .expect("pending type should be present")
             .contains("String"));
         assert_eq!(snapshot.pending_result_count, 1);
+
+        super::reset_navigation_for_tests();
+    }
+
+    #[test]
+    fn navigation_debug_snapshot_json_round_trips_for_devtools() {
+        super::reset_navigation_for_tests();
+        navigate("/");
+        navigate("/orders/42?tab=items&tag=paid&tag=pickup#notes");
+        present_modal("/filters");
+        navigate_for_result("/products/pick", |_: String| {});
+
+        let snapshot = navigation_debug_snapshot();
+        let json = encode_navigation_debug_snapshot(&snapshot).expect("snapshot should encode");
+        let decoded =
+            decode_navigation_debug_snapshot(&json).expect("snapshot should decode again");
+        let current_json =
+            navigation_debug_snapshot_json().expect("current snapshot should encode");
+        let value: serde_json::Value =
+            serde_json::from_str(&json).expect("snapshot JSON should parse");
+        let current_value: serde_json::Value =
+            serde_json::from_str(&current_json).expect("current snapshot JSON should parse");
+
+        assert_eq!(decoded, snapshot);
+        assert_eq!(current_value, value);
+        assert_eq!(value["current"], "/products/pick");
+        assert_eq!(value["historyDepth"], 3);
+        assert_eq!(value["canGoBack"], true);
+        assert_eq!(value["modalDepth"], 1);
+        assert_eq!(value["activeModal"], "/filters");
+        assert_eq!(value["hasPendingResult"], true);
+        assert!(value["pendingResultType"]
+            .as_str()
+            .expect("pending result type should be a string")
+            .contains("String"));
+        assert_eq!(value["location"]["path"], "/products/pick");
+        assert_eq!(
+            value["history"][1],
+            "/orders/42?tab=items&tag=paid&tag=pickup#notes"
+        );
+
+        let location_json =
+            serde_json::to_value(parse_route_location("/orders/42?tag=paid&tag=pickup#notes"))
+                .expect("route location should serialize");
+        assert_eq!(location_json["queryAll"]["tag"][0], "paid");
+        assert_eq!(location_json["queryAll"]["tag"][1], "pickup");
+        assert_eq!(location_json["fragment"], "notes");
 
         super::reset_navigation_for_tests();
     }

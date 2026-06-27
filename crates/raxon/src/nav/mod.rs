@@ -1041,6 +1041,9 @@ pub fn current_route() -> Signal<String> {
 /// `path` is the normalized route path without query or fragment, `query`
 /// contains the first value for each query key, `query_all` keeps repeated
 /// query keys, and `fragment` contains the decoded hash fragment without `#`.
+/// Hash-router URLs keep their hash-route marker in `fragment` so they can
+/// round-trip; use [`RouteLocation::route_fragment`] to read only the inner
+/// app fragment from either normal or hash-router URLs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RouteLocation {
@@ -1050,7 +1053,8 @@ pub struct RouteLocation {
     pub query: HashMap<String, String>,
     /// All decoded values for each decoded query key, preserving duplicate keys.
     pub query_all: HashMap<String, Vec<String>>,
-    /// Decoded URL fragment without the leading `#`, when present.
+    /// Decoded URL fragment without the leading `#`, when present. Hash-router
+    /// URLs keep their route marker here for round-tripping.
     pub fragment: Option<String>,
 }
 
@@ -1063,6 +1067,14 @@ impl RouteLocation {
     /// Returns all decoded values for `key`, if present.
     pub fn query_values(&self, key: &str) -> Option<&[String]> {
         self.query_all.get(key).map(Vec::as_slice)
+    }
+
+    /// Returns the decoded app fragment for normal and hash-router URLs.
+    ///
+    /// For example, `/orders#notes` and `/#/orders#notes` both return
+    /// `Some("notes")`, while `/#/orders?tab=items` returns `None`.
+    pub fn route_fragment(&self) -> Option<&str> {
+        route_fragment_value(self.fragment.as_deref())
     }
 
     /// Serializes this location back to a route string.
@@ -2108,8 +2120,13 @@ fn match_route_definition(pattern: &str, location: RouteLocation) -> Option<Rout
         return None;
     }
 
-    if let Some(pattern_fragment) = pattern_location.fragment.as_deref() {
-        if location.fragment.as_deref() != Some(pattern_fragment) {
+    let pattern_fragment = pattern_location.route_fragment();
+    let route_fragment = location
+        .route_fragment()
+        .map(std::borrow::ToOwned::to_owned);
+
+    if let Some(pattern_fragment) = pattern_fragment {
+        if route_fragment.as_deref() != Some(pattern_fragment) {
             return None;
         }
     }
@@ -2120,7 +2137,7 @@ fn match_route_definition(pattern: &str, location: RouteLocation) -> Option<Rout
         params,
         query: location.query,
         query_all: location.query_all,
-        fragment: location.fragment,
+        fragment: route_fragment,
     })
 }
 
@@ -2502,6 +2519,16 @@ fn format_hash_route(prefix: &str, path_and_query: &str, hash_route_marker: &str
     route.push('#');
     route.push_str(&encode_fragment_component(inner_fragment));
     route
+}
+
+fn route_fragment_value(fragment: Option<&str>) -> Option<&str> {
+    let fragment = fragment?;
+    let marker = fragment.strip_prefix('!').unwrap_or(fragment);
+    if marker.starts_with('/') {
+        let (_, inner_fragment) = split_once(marker, '#');
+        return inner_fragment.filter(|fragment| !fragment.is_empty());
+    }
+    Some(fragment)
 }
 
 fn format_path_and_query(path: &str, query_all: &HashMap<String, Vec<String>>) -> String {
@@ -3046,6 +3073,29 @@ mod tests {
     }
 
     #[test]
+    fn declarative_route_patterns_match_hash_router_inner_fragments() {
+        let matched = match_route_location(
+            "/checkout?step=pay#notes",
+            "https://rtylr.com/#/checkout?step=pay#notes",
+        )
+        .expect("hash-router fragment should match");
+
+        assert_eq!(matched.path, "/checkout");
+        assert_eq!(matched.query_value("step"), Some("pay"));
+        assert_eq!(matched.fragment.as_deref(), Some("notes"));
+        assert!(match_route_location(
+            "/checkout?step=pay#summary",
+            "https://rtylr.com/#/checkout?step=pay#notes",
+        )
+        .is_none());
+        assert!(match_route_location(
+            "/checkout?step=pay#notes",
+            "https://rtylr.com/#!/checkout?step=pay#notes",
+        )
+        .is_some());
+    }
+
+    #[test]
     fn url_route_matches_exposes_the_route_context() {
         let detail = route("/orders/:id", |_| {
             crate::view::boxed(crate::view::text("detail"))
@@ -3155,6 +3205,7 @@ mod tests {
 
         assert_eq!(location.path, "/checkout");
         assert_eq!(location.query["step"], "pay");
+        assert_eq!(location.route_fragment(), Some("notes"));
         assert_eq!(
             location.fragment.as_deref(),
             Some("/checkout?step=pay#notes")
@@ -3173,6 +3224,7 @@ mod tests {
 
         assert_eq!(location.path, "/checkout");
         assert_eq!(location.query["step"], "pay");
+        assert_eq!(location.route_fragment(), Some("line item 7"));
         assert_eq!(
             rewritten.to_route_string(),
             "/#!/checkout?coupon=VIP+10&step=pay#line%20item%207"

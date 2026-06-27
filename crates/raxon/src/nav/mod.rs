@@ -1121,15 +1121,27 @@ impl RouteLocation {
     /// Returns a copy with the URL fragment/hash set to `fragment`.
     pub fn with_fragment(&self, fragment: impl Into<String>) -> Self {
         let mut next = self.clone();
-        next.fragment = Some(fragment.into());
+        next.fragment = next.fragment_for_route_fragment(Some(fragment.into()));
         next
     }
 
     /// Returns a copy without a URL fragment/hash.
     pub fn without_fragment(&self) -> Self {
         let mut next = self.clone();
-        next.fragment = None;
+        next.fragment = next.fragment_for_route_fragment(None);
         next
+    }
+
+    fn fragment_for_route_fragment(&self, route_fragment: Option<String>) -> Option<String> {
+        let Some(prefix) = hash_route_marker_prefix(self.fragment.as_deref()) else {
+            return route_fragment;
+        };
+
+        Some(hash_route_marker(
+            prefix,
+            &format_path_and_query(&self.path, &self.query_all),
+            route_fragment.as_deref(),
+        ))
     }
 }
 
@@ -2528,6 +2540,28 @@ fn format_hash_route(prefix: &str, path_and_query: &str, hash_route_marker: &str
     route
 }
 
+fn hash_route_marker_prefix(fragment: Option<&str>) -> Option<&str> {
+    let fragment = fragment?;
+    if fragment.starts_with("!/") {
+        Some("!")
+    } else if fragment.starts_with('/') {
+        Some("")
+    } else {
+        None
+    }
+}
+
+fn hash_route_marker(prefix: &str, path_and_query: &str, inner_fragment: Option<&str>) -> String {
+    let mut marker = String::new();
+    marker.push_str(prefix);
+    marker.push_str(path_and_query);
+    if let Some(inner_fragment) = inner_fragment.filter(|fragment| !fragment.is_empty()) {
+        marker.push('#');
+        marker.push_str(inner_fragment);
+    }
+    marker
+}
+
 fn route_fragment_value(fragment: Option<&str>) -> Option<&str> {
     let fragment = fragment?;
     let marker = fragment.strip_prefix('!').unwrap_or(fragment);
@@ -3209,6 +3243,8 @@ mod tests {
     fn route_location_preserves_hash_router_inner_fragments() {
         let location = parse_route_location("https://rtylr.com/#/checkout?step=pay#notes");
         let rewritten = location.with_query_param("coupon", "VIP 10");
+        let changed_fragment = location.with_fragment("line item 7");
+        let removed_fragment = changed_fragment.without_fragment();
 
         assert_eq!(location.path, "/checkout");
         assert_eq!(location.query["step"], "pay");
@@ -3222,6 +3258,36 @@ mod tests {
             rewritten.to_route_string(),
             "/#/checkout?coupon=VIP+10&step=pay#notes"
         );
+        assert_eq!(changed_fragment.route_fragment(), Some("line item 7"));
+        assert_eq!(
+            changed_fragment.to_route_string(),
+            "/#/checkout?step=pay#line%20item%207"
+        );
+        assert_eq!(removed_fragment.route_fragment(), None);
+        assert_eq!(removed_fragment.to_route_string(), "/#/checkout?step=pay");
+    }
+
+    #[test]
+    fn route_location_fragment_helpers_preserve_hash_bang_routes() {
+        let location = parse_route_location("https://rtylr.com/#!/checkout?step=pay#notes");
+        let changed_fragment = location.with_fragment("line item 7");
+        let removed_fragment = changed_fragment.without_fragment();
+
+        assert_eq!(location.path, "/checkout");
+        assert_eq!(location.query["step"], "pay");
+        assert_eq!(location.route_fragment(), Some("notes"));
+        assert_eq!(
+            location.fragment.as_deref(),
+            Some("!/checkout?step=pay#notes")
+        );
+        assert_eq!(location.to_route_string(), "/#!/checkout?step=pay#notes");
+        assert_eq!(changed_fragment.route_fragment(), Some("line item 7"));
+        assert_eq!(
+            changed_fragment.to_route_string(),
+            "/#!/checkout?step=pay#line%20item%207"
+        );
+        assert_eq!(removed_fragment.route_fragment(), None);
+        assert_eq!(removed_fragment.to_route_string(), "/#!/checkout?step=pay");
     }
 
     #[test]
@@ -3424,6 +3490,42 @@ mod tests {
         let pushed_removed = remove_fragment();
         assert_eq!(pushed_removed, "/orders/42?tab=items");
         assert_eq!(navigation_state().history.len(), 3);
+
+        super::reset_navigation_for_tests();
+    }
+
+    #[test]
+    fn fragment_helpers_preserve_hash_router_routes() {
+        super::reset_navigation_for_tests();
+        reset_route("/#/checkout?step=pay");
+
+        let pushed = set_fragment("line item 7");
+        assert_eq!(pushed, "/#/checkout?step=pay#line%20item%207");
+        assert_eq!(
+            navigation_state().history,
+            vec![
+                "/#/checkout?step=pay".to_string(),
+                "/#/checkout?step=pay#line%20item%207".to_string(),
+            ]
+        );
+
+        let removed = replace_remove_fragment();
+        assert_eq!(removed, "/#/checkout?step=pay");
+        assert_eq!(
+            navigation_state().history,
+            vec![
+                "/#/checkout?step=pay".to_string(),
+                "/#/checkout?step=pay".to_string(),
+            ]
+        );
+
+        super::reset_navigation_for_tests();
+        reset_route("/#!/checkout?step=pay#notes");
+
+        let replaced = replace_fragment("summary");
+        assert_eq!(replaced, "/#!/checkout?step=pay#summary");
+        let pushed_removed = remove_fragment();
+        assert_eq!(pushed_removed, "/#!/checkout?step=pay");
 
         super::reset_navigation_for_tests();
     }

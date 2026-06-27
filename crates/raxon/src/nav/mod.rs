@@ -93,6 +93,21 @@ pub struct Navigator<R: 'static> {
     transition: Signal<NavigationTransitionContext>,
 }
 
+/// Debug/introspection snapshot for a typed [`Navigator`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NavigatorDebugSnapshot<R> {
+    /// Routes from root to top.
+    pub stack: Vec<R>,
+    /// Number of routes in the stack.
+    pub depth: usize,
+    /// Current top route, if any.
+    pub top: Option<R>,
+    /// Whether the stack can pop.
+    pub can_pop: bool,
+    /// Latest transition context.
+    pub transition: NavigationTransitionContext,
+}
+
 impl<R: 'static> Clone for Navigator<R> {
     fn clone(&self) -> Self {
         *self
@@ -219,6 +234,20 @@ impl<R: Clone + 'static> Navigator<R> {
     pub fn transition_context(&self) -> NavigationTransitionContext {
         self.transition.get()
     }
+
+    /// Captures the current stack, top route, pop state, and transition context.
+    pub fn debug_snapshot(&self) -> NavigatorDebugSnapshot<R> {
+        let stack = self.stack.get();
+        let depth = stack.len();
+        let top = stack.last().cloned();
+        NavigatorDebugSnapshot {
+            stack,
+            depth,
+            top,
+            can_pop: depth > 1,
+            transition: self.transition_context(),
+        }
+    }
 }
 
 /// A tab navigator where each tab owns an independent route stack.
@@ -230,6 +259,23 @@ impl<R: Clone + 'static> Navigator<R> {
 pub struct TabStackNavigator<R: 'static> {
     stacks: Signal<Vec<Vec<R>>>,
     selected: Signal<usize>,
+}
+
+/// Debug/introspection snapshot for a [`TabStackNavigator`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TabStackDebugSnapshot<R> {
+    /// Selected tab index, clamped to the available tab range.
+    pub selected_index: usize,
+    /// Number of tabs.
+    pub tab_count: usize,
+    /// Route stacks for every tab.
+    pub stacks: Vec<Vec<R>>,
+    /// Current selected tab stack.
+    pub selected_stack: Vec<R>,
+    /// Current route in the selected tab, if any.
+    pub selected_top: Option<R>,
+    /// Whether the selected tab can pop.
+    pub can_pop: bool,
 }
 
 impl<R: 'static> Clone for TabStackNavigator<R> {
@@ -420,6 +466,29 @@ impl<R: Clone + 'static> TabStackNavigator<R> {
             }
         });
         changed
+    }
+
+    /// Captures all tab stacks plus selected-tab state for devtools/inspectors.
+    pub fn debug_snapshot(&self) -> TabStackDebugSnapshot<R> {
+        let stacks = self.stacks.get();
+        let tab_count = stacks.len();
+        let selected_index = if tab_count == 0 {
+            0
+        } else {
+            self.selected.get().min(tab_count - 1)
+        };
+        let selected_stack = stacks.get(selected_index).cloned().unwrap_or_default();
+        let selected_top = selected_stack.last().cloned();
+        let can_pop = selected_stack.len() > 1;
+
+        TabStackDebugSnapshot {
+            selected_index,
+            tab_count,
+            stacks,
+            selected_stack,
+            selected_top,
+            can_pop,
+        }
     }
 }
 
@@ -929,6 +998,35 @@ pub struct NavigationState {
     pub modals: Vec<String>,
 }
 
+/// Debug/introspection snapshot for the string router.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NavigationDebugSnapshot {
+    /// Current route at the top of the string-router stack.
+    pub current: String,
+    /// Parsed current route, including query params and fragment.
+    pub location: RouteLocation,
+    /// String-router history from oldest to newest route.
+    pub history: Vec<String>,
+    /// Number of entries in [`history`](Self::history).
+    pub history_depth: usize,
+    /// Whether the string router can go back.
+    pub can_go_back: bool,
+    /// Modal routes from bottom to top.
+    pub modals: Vec<String>,
+    /// Number of active modal routes.
+    pub modal_depth: usize,
+    /// Top-most modal route, if any.
+    pub active_modal: Option<String>,
+    /// Whether a route-result callback is pending.
+    pub has_pending_result: bool,
+    /// Route associated with the latest pending result callback, if any.
+    pub pending_result_route: Option<String>,
+    /// Rust type name expected by the latest pending result callback, if any.
+    pub pending_result_type: Option<String>,
+    /// Number of pending result callbacks.
+    pub pending_result_count: usize,
+}
+
 impl NavigationState {
     /// Creates a normalized navigation state snapshot.
     pub fn new(
@@ -1214,6 +1312,45 @@ pub fn navigation_state() -> NavigationState {
     let modals = MODAL_STACK.with(|stack| stack.borrow().clone());
 
     NavigationState::new(current, history, modals)
+}
+
+/// Captures a devtools-friendly snapshot of string-router state.
+///
+/// The snapshot includes the normalized current route, parsed path/query/hash
+/// location, history stack, modal stack, back availability, and pending
+/// route-result metadata.
+pub fn navigation_debug_snapshot() -> NavigationDebugSnapshot {
+    let state = navigation_state();
+    let history_depth = state.history.len();
+    let can_go_back = history_depth > 1;
+    let modal_depth = state.modals.len();
+    let active_modal = state.modals.last().cloned();
+    let location = parse_route_location(&state.current);
+    let (pending_result_route, pending_result_type, pending_result_count) = ROUTE_RESULT_HANDLERS
+        .with(|handlers| {
+            let handlers = handlers.borrow();
+            let pending = handlers.last();
+            (
+                pending.map(|pending| pending.route.clone()),
+                pending.map(|pending| pending.type_name.to_string()),
+                handlers.len(),
+            )
+        });
+
+    NavigationDebugSnapshot {
+        current: state.current,
+        location,
+        history: state.history,
+        history_depth,
+        can_go_back,
+        modals: state.modals,
+        modal_depth,
+        active_modal,
+        has_pending_result: pending_result_count > 0,
+        pending_result_route,
+        pending_result_type,
+        pending_result_count,
+    }
 }
 
 /// Restores string-router history and modal stack from a snapshot.
@@ -2420,12 +2557,13 @@ mod tests {
         build_route, build_route_with_query, cancel_route_result, create_navigator,
         create_tab_stack_navigator, current_route, decode_navigation_state,
         encode_navigation_state, has_pending_route_result, match_route, match_route_location,
-        modal_stack, navigate, navigate_for_result, navigation_state, on_appear, on_disappear,
-        on_navigate, on_transition_complete, on_transition_start, parse_deep_link, parse_query,
-        parse_query_all, parse_route_location, pending_route_result_route,
-        pending_route_result_type, present_modal, replace_route, restore_navigation_state,
-        restore_saved_navigation_state, return_route_result, route, save_navigation_state,
-        try_navigate_for_result, NavigationState, NavigatorTransitionKind, RouteTransitionKind,
+        modal_stack, navigate, navigate_for_result, navigation_debug_snapshot, navigation_state,
+        on_appear, on_disappear, on_navigate, on_transition_complete, on_transition_start,
+        parse_deep_link, parse_query, parse_query_all, parse_route_location,
+        pending_route_result_route, pending_route_result_type, present_modal, replace_route,
+        restore_navigation_state, restore_saved_navigation_state, return_route_result, route,
+        save_navigation_state, try_navigate_for_result, NavigationState, NavigatorTransitionKind,
+        RouteTransitionKind,
     };
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -2803,6 +2941,22 @@ mod tests {
     }
 
     #[test]
+    fn typed_navigator_debug_snapshot_reports_stack_and_transition() {
+        let nav = create_navigator(TestScreen::Home);
+        nav.push(TestScreen::Detail);
+
+        let snapshot = nav.debug_snapshot();
+
+        assert_eq!(snapshot.stack, vec![TestScreen::Home, TestScreen::Detail]);
+        assert_eq!(snapshot.depth, 2);
+        assert_eq!(snapshot.top, Some(TestScreen::Detail));
+        assert!(snapshot.can_pop);
+        assert_eq!(snapshot.transition.kind, NavigatorTransitionKind::Push);
+        assert_eq!(snapshot.transition.from_depth, 1);
+        assert_eq!(snapshot.transition.to_depth, 2);
+    }
+
+    #[test]
     fn tab_stack_navigator_preserves_independent_tab_stacks() {
         let nav = create_tab_stack_navigator(vec![TestScreen::Home, TestScreen::Settings]);
 
@@ -2856,6 +3010,32 @@ mod tests {
         assert_eq!(nav.top_for_tab(99), None);
         assert_eq!(nav.depth_for_tab(99), 0);
         assert!(!nav.reset_tab(99, TestScreen::Home));
+    }
+
+    #[test]
+    fn tab_stack_debug_snapshot_reports_selected_stack_state() {
+        let nav = create_tab_stack_navigator(vec![TestScreen::Home, TestScreen::Settings]);
+        nav.push(TestScreen::Detail);
+        assert!(nav.select(1));
+        nav.push(TestScreen::Search);
+
+        let snapshot = nav.debug_snapshot();
+
+        assert_eq!(snapshot.selected_index, 1);
+        assert_eq!(snapshot.tab_count, 2);
+        assert_eq!(
+            snapshot.stacks,
+            vec![
+                vec![TestScreen::Home, TestScreen::Detail],
+                vec![TestScreen::Settings, TestScreen::Search]
+            ]
+        );
+        assert_eq!(
+            snapshot.selected_stack,
+            vec![TestScreen::Settings, TestScreen::Search]
+        );
+        assert_eq!(snapshot.selected_top, Some(TestScreen::Search));
+        assert!(snapshot.can_pop);
     }
 
     #[test]
@@ -2970,6 +3150,46 @@ mod tests {
             vec!["/".to_string(), "/orders/42?tab=items".to_string()]
         );
         assert_eq!(state.modals, vec!["/filters".to_string()]);
+
+        super::reset_navigation_for_tests();
+    }
+
+    #[test]
+    fn navigation_debug_snapshot_reports_string_router_state() {
+        super::reset_navigation_for_tests();
+        navigate("/");
+        navigate("/orders/42?tab=items&tag=paid&tag=pickup#notes");
+        present_modal("/filters");
+        navigate_for_result("/products/pick", |_: String| {});
+
+        let snapshot = navigation_debug_snapshot();
+
+        assert_eq!(snapshot.current, "/products/pick");
+        assert_eq!(snapshot.location.path, "/products/pick");
+        assert_eq!(
+            snapshot.history,
+            vec![
+                "/".to_string(),
+                "/orders/42?tab=items&tag=paid&tag=pickup#notes".to_string(),
+                "/products/pick".to_string()
+            ]
+        );
+        assert_eq!(snapshot.history_depth, 3);
+        assert!(snapshot.can_go_back);
+        assert_eq!(snapshot.modals, vec!["/filters".to_string()]);
+        assert_eq!(snapshot.modal_depth, 1);
+        assert_eq!(snapshot.active_modal.as_deref(), Some("/filters"));
+        assert!(snapshot.has_pending_result);
+        assert_eq!(
+            snapshot.pending_result_route.as_deref(),
+            Some("/products/pick")
+        );
+        assert!(snapshot
+            .pending_result_type
+            .as_deref()
+            .expect("pending type should be present")
+            .contains("String"));
+        assert_eq!(snapshot.pending_result_count, 1);
 
         super::reset_navigation_for_tests();
     }

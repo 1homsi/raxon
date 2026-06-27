@@ -99,10 +99,11 @@ pub use registry::{
 };
 pub use view::{boxed, BoxedView, View, ViewSequence};
 pub use layout::{
-    aspect_ratio, center, expanded, flexible, responsive, safe_area_bottom, safe_area_top,
-    safe_area_view, update_layout_direction, update_window_size, use_layout_direction,
-    use_orientation, use_size_class, use_window_width, LayoutDirection as AppLayoutDirection,
-    Orientation, SizeClass,
+    adaptive_split_view, aspect_ratio, center, expanded, flexible, master_detail, responsive,
+    safe_area_bottom, safe_area_top, safe_area_view, split_view_mode_for_width,
+    update_layout_direction, update_window_size, use_layout_direction, use_orientation,
+    use_size_class, use_window_width, LayoutDirection as AppLayoutDirection, Orientation,
+    SizeClass, SplitPane, SplitViewConfig, SplitViewMode,
 };
 
 // Re-export the style enums used by the builder API for convenience.

@@ -7,6 +7,7 @@
 //! - [`center`] — center a child on both axes
 //! - [`safe_area_top`] / [`safe_area_bottom`] / [`safe_area_view`] — iOS safe-area insets
 //! - [`use_orientation`] / [`use_window_width`] / [`use_size_class`] — reactive device info
+//! - [`adaptive_split_view`] / [`master_detail`] — tablet/desktop adaptive panes
 //! - [`update_window_size`] — called by the platform backend on resize/rotation
 //!
 //! All helpers are built from the existing [`ViewExt`] modifier API, so they
@@ -17,10 +18,10 @@ use std::cell::RefCell;
 use crate::core::{AlignItems, JustifyContent};
 use crate::reactive::{create_memo, create_signal, Memo, Signal};
 
-use super::container::column;
+use super::container::{column, row};
 use super::modifier::ViewExt;
 use super::spacer::spacer;
-use super::view::View;
+use super::view::{boxed, BoxedView, View};
 
 // ---------------------------------------------------------------------------
 // RTL-aware layout direction
@@ -406,11 +407,281 @@ pub fn responsive<V: super::view::View + 'static>(
     builder: impl Fn(SizeClass, Orientation) -> V + 'static,
 ) -> impl super::view::View {
     use super::dynamic::dynamic;
-    use super::view::boxed;
 
     dynamic(move || {
         let sc = use_size_class().get();
         let ori = use_orientation().get();
         boxed(builder(sc, ori))
     })
+}
+
+// ---------------------------------------------------------------------------
+// Adaptive split view / master-detail
+// ---------------------------------------------------------------------------
+
+/// The pane shown when an adaptive split view collapses to compact width.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum SplitPane {
+    /// Show the primary/sidebar pane in compact width.
+    #[default]
+    Primary,
+    /// Show the detail/content pane in compact width.
+    Detail,
+}
+
+/// The current adaptive display mode for a split-view layout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SplitViewMode {
+    /// Compact phone-style layout: one pane is visible.
+    Compact,
+    /// Regular tablet/desktop layout: primary and detail panes are visible.
+    Split,
+}
+
+/// Configuration for [`adaptive_split_view`] and [`master_detail`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SplitViewConfig {
+    /// Width at or above which both panes are shown.
+    pub min_split_width: f32,
+    /// Fixed width for the primary pane when split.
+    pub primary_width: f32,
+    /// Gap between primary and detail panes when split.
+    pub gap: f32,
+}
+
+impl Default for SplitViewConfig {
+    fn default() -> Self {
+        Self {
+            min_split_width: 600.0,
+            primary_width: 320.0,
+            gap: 0.0,
+        }
+    }
+}
+
+impl SplitViewConfig {
+    /// Creates split-view config with a custom breakpoint and primary width.
+    pub const fn new(min_split_width: f32, primary_width: f32) -> Self {
+        Self {
+            min_split_width,
+            primary_width,
+            gap: 0.0,
+        }
+    }
+
+    /// Returns a copy with a custom gap between panes.
+    pub const fn with_gap(mut self, gap: f32) -> Self {
+        self.gap = gap;
+        self
+    }
+}
+
+/// Returns the split-view mode for `width` and `config`.
+pub fn split_view_mode_for_width(width: f32, config: SplitViewConfig) -> SplitViewMode {
+    let threshold = if config.min_split_width.is_finite() {
+        config.min_split_width.max(0.0)
+    } else {
+        f32::INFINITY
+    };
+
+    if width.is_finite() && width >= threshold {
+        SplitViewMode::Split
+    } else {
+        SplitViewMode::Compact
+    }
+}
+
+/// Builds an adaptive split view that shows one pane on compact widths and both
+/// panes side-by-side on regular widths.
+///
+/// `compact_pane` controls which pane is visible while compact. On regular
+/// widths, both panes are rendered in a row with the primary pane fixed to
+/// [`SplitViewConfig::primary_width`] and the detail pane taking the rest.
+///
+/// # Example
+/// ```rust
+/// use raxon::reactive::create_signal;
+/// use raxon::view::{adaptive_split_view, boxed, text, SplitPane, SplitViewConfig};
+///
+/// let compact = create_signal(SplitPane::Primary);
+/// let view = adaptive_split_view(
+///     compact,
+///     SplitViewConfig::default(),
+///     || boxed(text("Orders")),
+///     || boxed(text("Order detail")),
+/// );
+/// ```
+pub fn adaptive_split_view<Primary, Detail, PrimaryView, DetailView>(
+    compact_pane: Signal<SplitPane>,
+    config: SplitViewConfig,
+    primary: Primary,
+    detail: Detail,
+) -> impl View
+where
+    Primary: Fn() -> PrimaryView + 'static,
+    Detail: Fn() -> DetailView + 'static,
+    PrimaryView: View + 'static,
+    DetailView: View + 'static,
+{
+    use super::dynamic::dynamic;
+
+    dynamic(move || {
+        let width = use_window_width().get();
+        match split_view_mode_for_width(width, config) {
+            SplitViewMode::Split => split_view_row(config, primary(), detail()),
+            SplitViewMode::Compact => match compact_pane.get() {
+                SplitPane::Primary => boxed(column((boxed(primary()),)).grow()),
+                SplitPane::Detail => boxed(column((boxed(detail()),)).grow()),
+            },
+        }
+    })
+}
+
+/// Builds the common master-detail pattern.
+///
+/// In compact width this shows the master pane until `show_detail` is true, then
+/// shows the detail pane. In regular width both panes are visible.
+pub fn master_detail<Master, Detail, MasterView, DetailView>(
+    show_detail: Signal<bool>,
+    config: SplitViewConfig,
+    master: Master,
+    detail: Detail,
+) -> impl View
+where
+    Master: Fn() -> MasterView + 'static,
+    Detail: Fn() -> DetailView + 'static,
+    MasterView: View + 'static,
+    DetailView: View + 'static,
+{
+    use super::dynamic::dynamic;
+
+    dynamic(move || {
+        let width = use_window_width().get();
+        match split_view_mode_for_width(width, config) {
+            SplitViewMode::Split => split_view_row(config, master(), detail()),
+            SplitViewMode::Compact if show_detail.get() => boxed(column((boxed(detail()),)).grow()),
+            SplitViewMode::Compact => boxed(column((boxed(master()),)).grow()),
+        }
+    })
+}
+
+fn split_view_row<PrimaryView, DetailView>(
+    config: SplitViewConfig,
+    primary: PrimaryView,
+    detail: DetailView,
+) -> BoxedView
+where
+    PrimaryView: View + 'static,
+    DetailView: View + 'static,
+{
+    let primary_width = sane_non_negative(config.primary_width);
+    let gap = sane_non_negative(config.gap);
+
+    boxed(
+        row((
+            boxed(primary).width(primary_width).flex_shrink(0.0),
+            boxed(detail).grow(1.0),
+        ))
+        .gap(gap)
+        .grow(),
+    )
+}
+
+fn sane_non_negative(value: f32) -> f32 {
+    if value.is_finite() {
+        value.max(0.0)
+    } else {
+        0.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::{Dimension, FlexDirection};
+    use crate::dom::{Host, RecordingBackend, Tree};
+    use crate::reactive::{create_root, create_signal};
+    use crate::view::{mount, text};
+
+    #[test]
+    fn split_view_mode_uses_configured_breakpoint() {
+        let config = SplitViewConfig::new(700.0, 280.0);
+
+        assert_eq!(
+            split_view_mode_for_width(699.0, config),
+            SplitViewMode::Compact
+        );
+        assert_eq!(
+            split_view_mode_for_width(700.0, config),
+            SplitViewMode::Split
+        );
+        assert_eq!(
+            split_view_mode_for_width(1024.0, config),
+            SplitViewMode::Split
+        );
+    }
+
+    #[test]
+    fn split_view_mode_treats_invalid_widths_as_compact() {
+        let config = SplitViewConfig::default();
+
+        assert_eq!(
+            split_view_mode_for_width(f32::NAN, config),
+            SplitViewMode::Compact
+        );
+        assert_eq!(
+            split_view_mode_for_width(f32::INFINITY, config),
+            SplitViewMode::Compact
+        );
+    }
+
+    #[test]
+    fn split_view_config_sets_gap_with_builder() {
+        let config = SplitViewConfig::new(800.0, 340.0).with_gap(12.0);
+
+        assert_eq!(config.min_split_width, 800.0);
+        assert_eq!(config.primary_width, 340.0);
+        assert_eq!(config.gap, 12.0);
+    }
+
+    #[test]
+    fn adaptive_split_view_builds_two_pane_row_at_regular_width() {
+        let ((tree, root), _scope) = create_root(|| {
+            let width = use_window_width();
+            width.set(900.0);
+            update_window_size(900.0, 700.0);
+
+            let compact = create_signal(SplitPane::Primary);
+            let mut tree = Tree::new(Host::new(RecordingBackend::new()));
+            let root = mount(
+                &mut tree,
+                adaptive_split_view(
+                    compact,
+                    SplitViewConfig::new(700.0, 280.0).with_gap(12.0),
+                    || text("Master"),
+                    || text("Detail"),
+                ),
+            );
+            tree.run_dynamic();
+            (tree, root)
+        });
+
+        let dynamic_children = tree.children_of(root);
+        assert_eq!(dynamic_children.len(), 1);
+
+        let split_row = dynamic_children[0];
+        let row_style = tree.style_of(split_row).expect("row style exists");
+        assert_eq!(row_style.direction, FlexDirection::Row);
+        assert_eq!(row_style.gap, 12.0);
+
+        let panes = tree.children_of(split_row);
+        assert_eq!(panes.len(), 2);
+
+        let primary_style = tree.style_of(panes[0]).expect("primary style exists");
+        assert_eq!(primary_style.width, Dimension::Points(280.0));
+        assert_eq!(primary_style.flex_shrink, 0.0);
+
+        let detail_style = tree.style_of(panes[1]).expect("detail style exists");
+        assert_eq!(detail_style.flex_grow, 1.0);
+    }
 }

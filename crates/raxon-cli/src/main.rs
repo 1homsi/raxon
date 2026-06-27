@@ -2178,6 +2178,14 @@ class __ANDROID_CLASS__(private val root: ViewGroup) {
                 )
         )
 
+    fun navigationDebugSnapshot(): JSONObject =
+        request(
+            JSONObject()
+                .put("protocolVersion", 1)
+                .put("type", "navigation_debug_snapshot")
+                .put("handle", ensureMounted())
+        ).getJSONObject("snapshot")
+
     fun destroy(): JSONObject {
         val current = ensureMounted()
         val reply = request(
@@ -3165,7 +3173,7 @@ module, or merge these files into an existing module. Override
 platform services and custom widgets. The generated Activity includes default
 handlers for clipboard writes, share text, external URLs, accessibility
 announcements, focus requests, network reachability, media picking, and document
-picking, plus system appearance and locale changes.
+picking, plus system appearance, locale changes, and navigation debug snapshots.
 "#,
         package_path = options.android_package.replace('.', "/"),
         host_class = options.android_class,
@@ -3380,6 +3388,15 @@ export class RaxonWebHost {
       handle: Number(this.ensureMounted()),
       batch: { protocolVersion: 1, events },
     });
+  }
+
+  navigationDebugSnapshot() {
+    const reply = this.request({
+      protocolVersion: 1,
+      type: "navigation_debug_snapshot",
+      handle: Number(this.ensureMounted()),
+    });
+    return reply.snapshot ?? null;
   }
 
   browserNetworkStatus() {
@@ -4153,6 +4170,28 @@ export interface RaxonWebHostOptions {
   ) => boolean | void;
 }
 
+export interface RaxonRouteLocation {
+  path: string;
+  query: Record<string, string>;
+  queryAll: Record<string, string[]>;
+  fragment?: string | null;
+}
+
+export interface RaxonNavigationDebugSnapshot {
+  current: string;
+  location: RaxonRouteLocation;
+  history: string[];
+  historyDepth: number;
+  canGoBack: boolean;
+  modals: string[];
+  modalDepth: number;
+  activeModal?: string | null;
+  hasPendingResult: boolean;
+  pendingResultRoute?: string | null;
+  pendingResultType?: string | null;
+  pendingResultCount: number;
+}
+
 export function createRaxonWebHost(
   root: HTMLElement,
   options?: RaxonWebHostOptions,
@@ -4167,6 +4206,7 @@ export class RaxonWebHost {
   resize(width: number, height: number): RaxonBridgeReply;
   tick(): RaxonBridgeReply;
   dispatchEvents(events: unknown[]): RaxonBridgeReply;
+  navigationDebugSnapshot(): RaxonNavigationDebugSnapshot | null;
   destroy(): RaxonBridgeReply;
   request(request: Record<string, any>): RaxonBridgeReply;
   applyCommandBatch(batch: { commands?: unknown[] }): void;
@@ -4568,7 +4608,8 @@ Run `npm run dev` from this directory and open the printed local URL. The
 generated host includes default handlers for clipboard writes, share text,
 external URLs, accessibility announcements, focus requests, network
 reachability, media/document picking, app lifecycle, system appearance, and
-locale changes. Customize `main.js` or pass `handlePlatformRequest` for
+locale changes, plus `navigationDebugSnapshot()` for host/devtools inspection.
+Customize `main.js` or pass `handlePlatformRequest` for
 app-specific platform requests such as notifications or media pickers. Set
 `HOST` or `PORT` to override the dev-server bind address.
 "#,
@@ -5229,6 +5270,8 @@ name = "demo_native"
         assert!(kotlin.contains("installGesture"));
         assert!(kotlin.contains("type\", \"text_changed\""));
         assert!(kotlin.contains("commandHandler(command)"));
+        assert!(kotlin.contains("fun navigationDebugSnapshot(): JSONObject"));
+        assert!(kotlin.contains("\"navigation_debug_snapshot\""));
 
         let activity = fs::read_to_string(
             out_dir.join("android/app/src/main/java/dev/raxon/demo/DemoActivity.kt"),
@@ -5309,6 +5352,7 @@ name = "demo_native"
         let android_readme = fs::read_to_string(out_dir.join("android/README.md")).unwrap();
         assert!(android_readme.contains("./gradlew :app:assembleDebug"));
         assert!(android_readme.contains("app/src/main/jniLibs/<abi>/libdemo_lib.so"));
+        assert!(android_readme.contains("navigation debug snapshots"));
 
         let web_rust = fs::read_to_string(out_dir.join("web/raxon_web_bridge.rs")).unwrap();
         assert!(web_rust.contains("raxon_web_handle_request"));
@@ -5319,6 +5363,8 @@ name = "demo_native"
         assert!(web_js.contains("return import(\"./pkg/demo.js\")"));
         assert!(web_js.contains("instantiateRaxonWasm(wasmUrl"));
         assert!(web_js.contains("dispatchEvents(events)"));
+        assert!(web_js.contains("navigationDebugSnapshot()"));
+        assert!(web_js.contains("type: \"navigation_debug_snapshot\""));
         assert!(web_js.contains("applyCommand(command)"));
         assert!(web_js.contains("command.tag_name"));
         assert!(web_js.contains("command.css_color"));
@@ -5359,6 +5405,11 @@ name = "demo_native"
         assert!(web_js.contains("case \"open_external_url\""));
         assert!(web_js.contains("window.open(String(request.url)"));
 
+        let web_dts = fs::read_to_string(out_dir.join("web/raxon-web-host.d.ts")).unwrap();
+        assert!(web_dts.contains("interface RaxonNavigationDebugSnapshot"));
+        assert!(web_dts.contains("queryAll: Record<string, string[]>"));
+        assert!(web_dts.contains("navigationDebugSnapshot(): RaxonNavigationDebugSnapshot | null"));
+
         let web_index = fs::read_to_string(out_dir.join("web/index.html")).unwrap();
         assert!(web_index.contains("<title>Demo App</title>"));
         assert!(web_index.contains("<base href=\"/\" />"));
@@ -5385,6 +5436,9 @@ name = "demo_native"
         // Live-reload: SSE endpoint + injected client snippet.
         assert!(dev_server.contains("/__raxon_livereload"));
         assert!(dev_server.contains("text/event-stream"));
+
+        let web_readme = fs::read_to_string(out_dir.join("web/README.md")).unwrap();
+        assert!(web_readme.contains("navigationDebugSnapshot()"));
 
         let manifest = fs::read_to_string(out_dir.join("raxon-bindings.json")).unwrap();
         assert!(manifest.contains("\"target\": \"all\""));

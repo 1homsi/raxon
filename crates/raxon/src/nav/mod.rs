@@ -2476,16 +2476,31 @@ fn format_route_location(location: &RouteLocation) -> String {
     };
 
     if fragment.starts_with("!/") {
-        return format!("/#!{path_and_query}");
+        return format_hash_route("/#!", &path_and_query, fragment);
     }
 
     if fragment.starts_with('/') {
-        return format!("/#{path_and_query}");
+        return format_hash_route("/#", &path_and_query, fragment);
     }
 
     let mut route = path_and_query;
     route.push('#');
     route.push_str(&encode_fragment_component(fragment));
+    route
+}
+
+fn format_hash_route(prefix: &str, path_and_query: &str, hash_route_marker: &str) -> String {
+    let marker = hash_route_marker
+        .strip_prefix('!')
+        .unwrap_or(hash_route_marker);
+    let (_, inner_fragment) = split_once(marker, '#');
+    let Some(inner_fragment) = inner_fragment else {
+        return format!("{prefix}{path_and_query}");
+    };
+
+    let mut route = format!("{prefix}{path_and_query}");
+    route.push('#');
+    route.push_str(&encode_fragment_component(inner_fragment));
     route
 }
 
@@ -3130,6 +3145,37 @@ mod tests {
         assert_eq!(
             rewritten.to_route_string(),
             "/#/checkout?coupon=VIP+10&step=pay"
+        );
+    }
+
+    #[test]
+    fn route_location_preserves_hash_router_inner_fragments() {
+        let location = parse_route_location("https://rtylr.com/#/checkout?step=pay#notes");
+        let rewritten = location.with_query_param("coupon", "VIP 10");
+
+        assert_eq!(location.path, "/checkout");
+        assert_eq!(location.query["step"], "pay");
+        assert_eq!(
+            location.fragment.as_deref(),
+            Some("/checkout?step=pay#notes")
+        );
+        assert_eq!(location.to_route_string(), "/#/checkout?step=pay#notes");
+        assert_eq!(
+            rewritten.to_route_string(),
+            "/#/checkout?coupon=VIP+10&step=pay#notes"
+        );
+    }
+
+    #[test]
+    fn route_location_preserves_bang_hash_router_inner_fragments() {
+        let location = parse_route_location("https://rtylr.com/#!/checkout?step=pay#line item 7");
+        let rewritten = location.with_query_param("coupon", "VIP 10");
+
+        assert_eq!(location.path, "/checkout");
+        assert_eq!(location.query["step"], "pay");
+        assert_eq!(
+            rewritten.to_route_string(),
+            "/#!/checkout?coupon=VIP+10&step=pay#line%20item%207"
         );
     }
 
